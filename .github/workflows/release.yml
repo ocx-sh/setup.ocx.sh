@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions: {}
+
+jobs:
+  release:
+    name: GitHub release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate release notes
+        id: changelog
+        uses: orhun/git-cliff-action@c93ef52f3d0ddcdcc9bd5447d98d458a11cd4f72 # v4
+        with:
+          args: --latest --strip header
+        env:
+          GITHUB_REPO: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create release
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2
+        with:
+          body: ${{ steps.changelog.outputs.content }}
+          make_latest: true
+
+      - name: Update major version tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          major="${TAG%%.*}"
+          git tag -f "$major"
+          git push origin "$major" --force
+
+  publish-installers:
+    name: Publish installers to setup.ocx.sh
+    needs: [release]
+    runs-on: ubuntu-latest
+    environment: setup.ocx.sh
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Configure SSH
+        env:
+          DEPLOY_KEY: ${{ secrets.SETUP_OCX_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H setup.ocx.sh >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Publish
+        env:
+          TAG: ${{ github.ref_name }}
+          SSH_KEY: /home/runner/.ssh/id_ed25519
+          SETUP_OCX_HOST: setup.ocx.sh
+        run: |
+          VERSION="${TAG#v}" scripts/publish-installers.sh

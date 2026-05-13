@@ -1,0 +1,37 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+#
+# Real-distro integration matrix. Builds a thin image per distro, mounts
+# sh/install.sh, runs it against a real upstream release, asserts the
+# resulting `ocx --version` exit code. Multi-arch via Buildx + QEMU.
+
+version: '3'
+
+tasks:
+  integration:
+    desc: Run installer in a single distro/platform combination (DISTRO + PLATFORM)
+    requires:
+      vars: [DISTRO, PLATFORM]
+    preconditions:
+      - sh: docker buildx version
+        msg: 'docker buildx required (install docker-buildx-plugin or Docker Desktop)'
+    cmd: tests/docker/run.sh "{{.DISTRO}}" "{{.PLATFORM}}"
+
+  integration:all:
+    desc: Run installer across full matrix (alpine|fedora|ubuntu × linux/amd64|linux/arm64)
+    cmds:
+      - task: integration
+        vars: { DISTRO: alpine, PLATFORM: linux/amd64 }
+      - task: integration
+        vars: { DISTRO: alpine, PLATFORM: linux/arm64 }
+      - task: integration
+        vars: { DISTRO: fedora, PLATFORM: linux/amd64 }
+      - task: integration
+        vars: { DISTRO: fedora, PLATFORM: linux/arm64 }
+      - task: integration
+        vars: { DISTRO: ubuntu, PLATFORM: linux/amd64 }
+      - task: integration
+        vars: { DISTRO: ubuntu, PLATFORM: linux/arm64 }
+
+  qemu:register:
+    desc: Register binfmt handlers for cross-arch runs (idempotent)
+    cmd: docker run --privileged --rm tonistiigi/binfmt --install all

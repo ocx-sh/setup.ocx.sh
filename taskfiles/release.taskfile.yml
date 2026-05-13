@@ -1,0 +1,35 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+#
+# Release flow: git-cliff bumps the version from conventional commits,
+# regenerates CHANGELOG.md, commits + tags. Pushing the tag triggers
+# .github/workflows/release.yml which runs publish-installers.sh.
+
+version: '3'
+
+tasks:
+  changelog:
+    desc: Update CHANGELOG.md from git history
+    cmd: ocx exec --self ocx.sh/git-cliff:2.12 -- git-cliff --output CHANGELOG.md
+
+  changelog:preview:
+    desc: Preview unreleased changes
+    cmd: ocx exec --self ocx.sh/git-cliff:2.12 -- git-cliff --unreleased
+
+  prepare:
+    desc: Prepare a release (compute version, update changelog, verify, tag locally)
+    preconditions:
+      - sh: git diff --quiet && git diff --cached --quiet
+        msg: 'Working tree must be clean'
+    vars:
+      NEXT_VERSION:
+        sh: ocx exec --self ocx.sh/git-cliff:2.12 -- git-cliff --bumped-version
+    cmds:
+      - echo "Next version:{{.NEXT_VERSION}}"
+      - ocx exec --self ocx.sh/git-cliff:2.12 -- git-cliff --tag "{{.NEXT_VERSION}}" -o CHANGELOG.md
+      - task verify
+      - |
+        echo ""
+        echo "Release prepared ({{.NEXT_VERSION}}). Review changes, then:"
+        echo "  git add -A && git commit -m 'release: {{.NEXT_VERSION}}'"
+        echo "  git tag {{.NEXT_VERSION}}"
+        echo "  git push origin main && git push origin {{.NEXT_VERSION}}"

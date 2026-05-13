@@ -1,0 +1,97 @@
+name: Verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: ShellCheck installer + helper scripts
+        run: |
+          shellcheck sh/install.sh
+          shellcheck scripts/publish-installers.sh
+          shellcheck tests/docker/run.sh tests/docker/smoke.sh
+
+  shfmt:
+    name: shfmt diff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: mfinelli/setup-shfmt@1a143389339b48c4b48ae3cdc058f3dbe336a701 # v3
+        with:
+          shfmt-version: 3.10.0
+      - run: shfmt -d -i 4 -ci sh/ scripts/ tests/docker/
+
+  psscript-analyzer:
+    name: PSScriptAnalyzer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: Install-Module -Name PSScriptAnalyzer -Scope CurrentUser -Force -Repository PSGallery
+      - name: Run
+        shell: pwsh
+        run: Invoke-ScriptAnalyzer -Path pwsh/install.ps1 -Severity Warning,Error -EnableExit
+
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: raven-actions/actionlint@3a24062651993d40fed1019b58ac6fbdfbf276cc # v2
+        with:
+          version: 1.7.7
+
+  markdownlint:
+    name: markdownlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: DavidAnson/markdownlint-cli2-action@992badcdf24e3b8eb7e87ff9287fe931bcb00c6e # v20
+        with:
+          globs: |
+            **/*.md
+            !CHANGELOG.md
+            !node_modules
+            !.git
+
+  lychee:
+    name: lychee link check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: lycheeverse/lychee-action@1d97373ee75d56796b6e3da6e69a17b1b4dca4cf # v2
+        with:
+          args: --cache --no-progress README.md CHANGELOG.md .claude/rules/
+          fail: true
+
+  license-headers:
+    name: hawkeye license check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: korandoru/hawkeye@v6
+        with:
+          args: check
+
+  conventional-commits:
+    name: Conventional Commits
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - uses: cocogitto/cocogitto-action@v4.2.0
+        with:
+          check-latest-tag-only: true

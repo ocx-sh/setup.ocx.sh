@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+#
+# PowerShell quality gate. pwsh must be on PATH; OCX does not currently
+# vendor a pwsh package. CI uses ubuntu-latest's preinstalled pwsh; locally
+# install via your package manager.
+
+version: '3'
+
+tasks:
+  verify:
+    desc: PowerShell quality gate (PSScriptAnalyzer)
+    preconditions:
+      - sh: command -v pwsh
+        msg: 'pwsh not on PATH; install PowerShell to run this gate'
+    cmd: |
+      pwsh -NoProfile -Command '
+        if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
+          Install-Module -Name PSScriptAnalyzer -Scope CurrentUser -Force -Repository PSGallery
+        }
+        Invoke-ScriptAnalyzer -Path pwsh/install.ps1 -Severity Warning,Error -EnableExit
+      '
+
+  format:check:
+    desc: PSScriptAnalyzer format-rule subset
+    cmd: |
+      pwsh -NoProfile -Command '
+        Invoke-ScriptAnalyzer -Path pwsh/install.ps1 -Settings PSGallery -EnableExit
+      '

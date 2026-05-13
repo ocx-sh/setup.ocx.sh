@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 The OCX Authors
+#
+# Fedora integration container. glibc + dnf. Asserts the installer picks
+# the *-unknown-linux-gnu* target on a non-Debian glibc distro.
+
+ARG FEDORA_VERSION=41
+FROM fedora:${FEDORA_VERSION}
+
+RUN dnf install -y --setopt=install_weak_deps=False \
+    bash \
+    curl \
+    tar \
+    xz \
+    ca-certificates \
+    coreutils \
+    && dnf clean all
+
+WORKDIR /work
+COPY sh/install.sh /work/install.sh
+COPY tests/docker/smoke.sh /work/smoke.sh
+RUN chmod +x /work/install.sh /work/smoke.sh
+
+ENV OCX_HOME=/work/.ocx
+ENV OCX_NO_MODIFY_PATH=1
+
+ENTRYPOINT ["/work/smoke.sh"]

@@ -1,0 +1,90 @@
+name: Test installers
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag to test against (e.g. v0.5.0). Defaults to latest.'
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  bats:
+    name: Bats (env knobs / exit codes / print path)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Install bats + python3
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats xz-utils python3
+      - name: Run bats
+        run: bats tests/install/
+
+  pester:
+    name: Pester (env knobs)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Install Pester
+        shell: pwsh
+        run: |
+          Install-Module -Name Pester -Scope CurrentUser -Force -Repository PSGallery -SkipPublisherCheck
+      - name: Run Pester
+        shell: pwsh
+        run: |
+          $cfg = New-PesterConfiguration
+          $cfg.Run.Path = "tests/install/ps1"
+          $cfg.Run.Exit = $true
+          $cfg.Output.Verbosity = "Detailed"
+          Invoke-Pester -Configuration $cfg
+
+  install-sh-real:
+    name: install.sh (real release)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Run install.sh against real release
+        run: |
+          version_arg=""
+          if [ -n "${{ inputs.release_tag }}" ]; then
+            version_arg="--version $(echo '${{ inputs.release_tag }}' | sed 's/^v//')"
+          fi
+          # shellcheck disable=SC2086
+          OCX_NO_MODIFY_PATH=1 sh sh/install.sh $version_arg
+      - name: Verify
+        run: |
+          export PATH="$HOME/.ocx/symlinks/ocx.sh/ocx/current/bin:$PATH"
+          ocx version
+          test -f "$HOME/.ocx/env"
+
+  install-ps1-windows:
+    name: install.ps1 (Windows, real release)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Run install.ps1
+        shell: pwsh
+        run: |
+          $args = @()
+          if ("${{ inputs.release_tag }}") {
+            $args += "-Version"
+            $args += "${{ inputs.release_tag }}".TrimStart('v')
+          }
+          $env:OCX_NO_MODIFY_PATH = "1"
+          pwsh -NoProfile -File pwsh/install.ps1 @args
+      - name: Verify
+        shell: pwsh
+        run: |
+          $bin = Join-Path $env:USERPROFILE '.ocx\symlinks\ocx.sh\ocx\current\bin'
+          $env:Path = "$bin;$env:Path"
+          ocx version

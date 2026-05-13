@@ -1,0 +1,12 @@
+.DS_Store
+.env
+.env.*
+*.log
+*.tgz
+*.tar.gz
+*.tar.xz
+tmp/
+node_modules/
+.ocx/
+.task/
+target/

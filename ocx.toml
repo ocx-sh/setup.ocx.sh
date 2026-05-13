@@ -1,0 +1,10 @@
+[tools]
+shellcheck = "ocx.sh/shellcheck:0.11"
+shfmt = "ocx.sh/shfmt:3"
+bats = "ocx.sh/bats:1.11"
+
+[group.ci]
+hawkeye = "ocx.sh/hawkeye:6"
+actionlint = "ocx.sh/actionlint:1.7"
+lychee = "ocx.sh/lychee:0"
+git-cliff = "ocx.sh/git-cliff:2.12"

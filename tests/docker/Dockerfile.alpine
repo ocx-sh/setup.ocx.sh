@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 The OCX Authors
+#
+# Alpine integration container. musl libc → installer must pick the
+# *-unknown-linux-musl* target.
+
+ARG ALPINE_VERSION=3.20
+FROM alpine:${ALPINE_VERSION}
+
+RUN apk add --no-cache \
+    bash \
+    curl \
+    tar \
+    xz \
+    ca-certificates \
+    coreutils
+
+WORKDIR /work
+COPY sh/install.sh /work/install.sh
+COPY tests/docker/smoke.sh /work/smoke.sh
+RUN chmod +x /work/install.sh /work/smoke.sh
+
+ENV OCX_HOME=/work/.ocx
+ENV OCX_NO_MODIFY_PATH=1
+
+ENTRYPOINT ["/work/smoke.sh"]

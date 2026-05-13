@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 The OCX Authors
+#
+# Ubuntu integration container. glibc + apt. Mirrors what most CI runners look
+# like; this is the "happy path" baseline.
+
+ARG UBUNTU_VERSION=24.04
+FROM ubuntu:${UBUNTU_VERSION}
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    curl \
+    tar \
+    xz-utils \
+    ca-certificates \
+    coreutils \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work
+COPY sh/install.sh /work/install.sh
+COPY tests/docker/smoke.sh /work/smoke.sh
+RUN chmod +x /work/install.sh /work/smoke.sh
+
+ENV OCX_HOME=/work/.ocx
+ENV OCX_NO_MODIFY_PATH=1
+
+ENTRYPOINT ["/work/smoke.sh"]

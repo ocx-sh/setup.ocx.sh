@@ -1,0 +1,106 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+env:
+  OCX_INDEX: '{{.ROOT_DIR}}/.ocx/index'
+
+includes:
+  shell: ./taskfiles/shell.taskfile.yml
+  pwsh: ./taskfiles/pwsh.taskfile.yml
+  test: ./taskfiles/test.taskfile.yml
+  docker: ./taskfiles/docker.taskfile.yml
+  release: ./taskfiles/release.taskfile.yml
+  meta: ./taskfiles/meta.taskfile.yml
+  # Tool registrations (backed by ocx.taskfile.yml)
+  shellcheck:
+    taskfile: ./taskfiles/ocx.taskfile.yml
+    internal: true
+    vars:
+      PACKAGE: 'ocx.sh/shellcheck:0.11'
+      TOOL: shellcheck
+      GLOB: '*.sh'
+  shfmt:
+    taskfile: ./taskfiles/ocx.taskfile.yml
+    internal: true
+    vars:
+      PACKAGE: 'ocx.sh/shfmt:3'
+      TOOL: shfmt
+      GLOB: '*.sh'
+  bats:
+    taskfile: ./taskfiles/ocx.taskfile.yml
+    internal: true
+    vars:
+      PACKAGE: 'ocx.sh/bats:1.11'
+      TOOL: bats
+      GLOB: '*.bats'
+  hawkeye:
+    taskfile: ./taskfiles/ocx.taskfile.yml
+    internal: true
+    vars:
+      PACKAGE: 'ocx.sh/hawkeye:6'
+      TOOL: hawkeye
+      GLOB: '*'
+  actionlint:
+    taskfile: ./taskfiles/ocx.taskfile.yml
+    internal: true
+    vars:
+      PACKAGE: 'ocx.sh/actionlint:1.7'
+      TOOL: actionlint
+      GLOB: '.github/workflows/*.yml'
+  lychee:
+    taskfile: ./taskfiles/ocx.taskfile.yml
+    internal: true
+    vars:
+      PACKAGE: 'ocx.sh/lychee:0'
+      TOOL: lychee
+      GLOB: '*.md'
+  git-cliff:
+    taskfile: ./taskfiles/ocx.taskfile.yml
+    internal: true
+    vars:
+      PACKAGE: 'ocx.sh/git-cliff:2.12'
+      TOOL: git-cliff
+      GLOB: 'cliff.toml'
+
+tasks:
+  ocx:index-update:
+    desc: Refresh the OCX tool index lock.
+    cmds:
+      - rm -rf .ocx/index
+      - ocx index update shellcheck:0.11 shfmt:3 bats:1.11 hawkeye:6 actionlint:1.7 lychee:0 git-cliff:2.12
+
+  # Two-phase verify: parallel lint, then sequential tests.
+  verify:
+    desc: Full quality gate (lint + bats + pester)
+    summary: |
+      Phase 1 (parallel): shell:verify, pwsh:verify, meta:verify
+      Phase 2 (sequential): test:bats, test:pester
+    cmds:
+      - task: .verify:lint
+      - task: .verify:tests
+
+  .verify:lint:
+    internal: true
+    deps:
+      - task: shell:verify
+      - task: pwsh:verify
+      - task: meta:verify
+
+  .verify:tests:
+    internal: true
+    cmds:
+      - task: test:bats
+      - task: test:pester
+
+  publish:dry-run:
+    desc: Validate publish-installers.sh rsync paths without uploading.
+    vars:
+      VERSION:
+        sh: 'ocx exec --self ocx.sh/git-cliff:2.12 -- git-cliff --bumped-version 2>/dev/null | sed "s/^v//" || echo "0.0.0-dev"'
+    cmd: DRY_RUN=1 VERSION={{.VERSION}} SSH_KEY=/dev/null SETUP_OCX_HOST=setup.ocx.sh scripts/publish-installers.sh
+
+  format:
+    desc: Auto-format shell scripts
+    cmds:
+      - task: shell:format

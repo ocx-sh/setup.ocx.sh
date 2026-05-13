@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+tasks:
+  bats:
+    desc: Run Bats env-knob + exit-code + print-path suites against fixture HTTP server
+    preconditions:
+      - sh: command -v python3
+        msg: 'python3 required for fixture HTTP server'
+    cmd: ocx exec --self ocx.sh/bats:1.11 -- bats tests/install/
+
+  pester:
+    desc: Run Pester equivalents on Windows / pwsh
+    preconditions:
+      - sh: command -v pwsh
+        msg: 'pwsh required for Pester tests'
+    cmd: |
+      pwsh -NoProfile -Command '
+        if (-not (Get-Module -ListAvailable Pester)) {
+          Install-Module -Name Pester -Scope CurrentUser -Force -Repository PSGallery -SkipPublisherCheck
+        }
+        $cfg = New-PesterConfiguration
+        $cfg.Run.Path = "tests/install/ps1"
+        $cfg.Run.Exit = $true
+        $cfg.Output.Verbosity = "Detailed"
+        Invoke-Pester -Configuration $cfg
+      '
+
+  bats:single:
+    desc: Run a single Bats file (pass FILE=path/to.bats)
+    requires: { vars: [FILE] }
+    cmd: ocx exec --self ocx.sh/bats:1.11 -- bats {{.FILE}}

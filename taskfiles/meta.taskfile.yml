@@ -1,0 +1,39 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+#
+# Cross-cutting lint gates: workflows, markdown, license headers, link rot.
+
+version: '3'
+
+tasks:
+  verify:
+    desc: Cross-cutting lint (workflows, markdown, license, links)
+    deps:
+      - task: actionlint
+      - task: hawkeye
+      - task: markdownlint
+      - task: lychee
+
+  actionlint:
+    desc: Lint GitHub Actions workflows
+    cmd: ocx exec --self ocx.sh/actionlint:1.7 -- actionlint -color
+
+  hawkeye:
+    desc: Verify license headers
+    cmd: ocx exec --self ocx.sh/hawkeye:6 -- hawkeye check
+
+  markdownlint:
+    desc: Lint Markdown files
+    # markdownlint-cli2 is npm-only; CI uses the action. Locally fall back gracefully.
+    preconditions:
+      - sh: command -v markdownlint-cli2 || command -v markdownlint
+        msg: 'markdownlint-cli2 not installed; CI is authoritative'
+    cmd: |
+      if command -v markdownlint-cli2 >/dev/null 2>&1; then
+        markdownlint-cli2 '**/*.md' '!CHANGELOG.md' '!node_modules' '!.git'
+      else
+        markdownlint --ignore CHANGELOG.md --ignore node_modules '**/*.md'
+      fi
+
+  lychee:
+    desc: Link-check Markdown files (offline-friendly via --cache)
+    cmd: ocx exec --self ocx.sh/lychee:0 -- lychee --cache --no-progress README.md CHANGELOG.md .claude/rules/

@@ -1,0 +1,17 @@
+inlineHeader = """
+SPDX-License-Identifier: Apache-2.0
+Copyright 2026 The OCX Authors"""
+
+includes = [
+    "sh/**/*.sh",
+    "pwsh/**/*.ps1",
+    "scripts/**/*.sh",
+    "tests/**/*.bats",
+    "tests/**/*.ps1",
+    "tests/docker/**/*.sh",
+]
+excludes = [
+    "node_modules/**",
+    ".ocx/**",
+    "target/**",
+]

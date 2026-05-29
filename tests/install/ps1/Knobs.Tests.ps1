@@ -1,66 +1,29 @@
 #Requires -Modules @{ ModuleName='Pester'; ModuleVersion='5.0.0' }
 # Pester tests for pwsh/install.ps1 env-var knobs and exit codes.
-# Mirrors the Bats suite in ../env-knobs.bats.
+# Mirrors the Bats suite in ../env-knobs.bats, scenario for scenario.
+#
+# Runs meaningfully on both windows-latest and ubuntu-pwsh: the fixture archive
+# is FLAT (see Fixture.psm1) so extraction + binary-location work on Linux too,
+# and Detect-Architecture keys off RuntimeInformation (returns the windows-msvc
+# target on any X64 host). Scenarios that require EXECUTING the extracted
+# ocx.exe (bootstrap argv, exit-6, native version smoke) are gated to Windows;
+# see -Skip notes and ../../.claude/rules/testing-pwsh.md.
 
 BeforeAll {
+    Import-Module (Join-Path $PSScriptRoot 'Fixture.psm1') -Force
     $script:InstallPs1 = Join-Path $PSScriptRoot '..\..\..\pwsh\install.ps1'
-    $script:Target = 'x86_64-pc-windows-msvc'
-    $script:FixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) "ocx-install-test-$([System.Guid]::NewGuid().ToString('N').Substring(0,8))"
+    $script:Target = Get-FixtureTarget
 
-    # Build fixture: stub ocx.exe (a .cmd that prints version), zipped, with sha256.
-    $build = Join-Path $FixtureRoot "build\ocx-$Target"
-    New-Item -ItemType Directory -Path $build -Force | Out-Null
-    $stubCmd = Join-Path $build 'ocx.cmd'
-    @"
-@echo off
-if "%1"=="version" echo 0.0.0
-"@ | Set-Content -Path $stubCmd -Encoding ASCII
-    # Pwsh archive expects ocx.exe; rename .cmd → .exe (we never execute it
-    # on Windows in skip-bootstrap mode beyond optional smoke test which
-    # OCX_INSTALL_NO_BIN_SMOKETEST=1 disables).
-    Move-Item $stubCmd (Join-Path $build 'ocx.exe')
-
-    $srvDir = Join-Path $FixtureRoot 'srv\releases\download\v0.0.0'
-    New-Item -ItemType Directory -Path $srvDir -Force | Out-Null
-    $apiDir = Join-Path $FixtureRoot 'srv\api\repos\ocx-sh\ocx\releases'
-    New-Item -ItemType Directory -Path $apiDir -Force | Out-Null
-
-    $archivePath = Join-Path $srvDir "ocx-$Target.zip"
-    Compress-Archive -Path $build -DestinationPath $archivePath -Force
-
-    $hash = (Get-FileHash -Path $archivePath -Algorithm SHA256).Hash.ToLower()
-    "$hash  ocx-$Target.zip" | Set-Content -Path (Join-Path $srvDir 'sha256.sum') -Encoding ASCII
-
-    '{"tag_name":"v0.0.0"}' | Set-Content -Path (Join-Path $apiDir 'latest') -Encoding ASCII
-
-    # Start Python http.server (assumes python3 on PATH on Windows runners).
-    $script:ServerLog = Join-Path $FixtureRoot 'srv.log'
-    $srvRoot = Join-Path $FixtureRoot 'srv'
-    $script:ServerProc = Start-Process -FilePath 'python' `
-        -ArgumentList '-u', '-m', 'http.server', '0' `
-        -WorkingDirectory $srvRoot `
-        -RedirectStandardOutput $ServerLog `
-        -RedirectStandardError $ServerLog `
-        -PassThru -NoNewWindow
-
-    $script:Port = $null
-    for ($i = 0; $i -lt 100; $i++) {
-        if (Test-Path $ServerLog) {
-            $line = Get-Content $ServerLog -Raw
-            if ($line -match 'port (\d+)') { $script:Port = $Matches[1]; break }
-        }
-        Start-Sleep -Milliseconds 100
-    }
-    if (-not $Port) { throw "Failed to start fixture server (log: $ServerLog)" }
-
-    $script:BaseUrl = "http://127.0.0.1:$Port/releases/download"
-    $script:ApiUrl = "http://127.0.0.1:$Port/api/repos/ocx-sh/ocx/releases"
+    $script:FixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) "ocx-knobs-$([System.Guid]::NewGuid().ToString('N').Substring(0,8))"
+    $fixture = New-OcxFixture -Root $FixtureRoot
+    $script:Server = Start-FixtureServer -SrvRoot $fixture.SrvRoot
+    $script:BaseUrl = $Server.BaseUrl
+    $script:ApiUrl = $Server.ApiUrl
+    $script:Port = $Server.Port
 }
 
 AfterAll {
-    if ($ServerProc -and -not $ServerProc.HasExited) {
-        Stop-Process -Id $ServerProc.Id -Force -ErrorAction SilentlyContinue
-    }
+    Stop-FixtureServer -Server $Server
     if (Test-Path $FixtureRoot) {
         Remove-Item -Recurse -Force $FixtureRoot -ErrorAction SilentlyContinue
     }
@@ -71,7 +34,7 @@ Describe 'install.ps1 env knobs' {
         $script:OcxHome = Join-Path ([System.IO.Path]::GetTempPath()) "ocx-test-$([System.Guid]::NewGuid().ToString('N').Substring(0,8))"
         $env:OCX_HOME = $OcxHome
         $env:OCX_NO_MODIFY_PATH = '1'
-        $env:OCX_INSTALL_SKIP_BOOTSTRAP = '1'
+        $env:OCX_INSTALL_SKIP_SELF_INIT = '1'
         $env:OCX_INSTALL_NO_BIN_SMOKETEST = '1'
         $env:OCX_INSTALL_BASE_URL = $BaseUrl
         $env:OCX_INSTALL_API_URL = $ApiUrl
@@ -87,74 +50,136 @@ Describe 'install.ps1 env knobs' {
         if (Test-Path $OcxHome) { Remove-Item -Recurse -Force $OcxHome -ErrorAction SilentlyContinue }
     }
 
-    It 'installs from env-overridden URLs' {
+    # Mirrors env-knobs.bats:
+    #   "default install via env-overridden URLs writes binary to OCX_HOME"
+    It 'default install via env-overridden URLs writes binary to OCX_HOME' {
         & pwsh -NoProfile -File $InstallPs1 -Version '0.0.0' | Out-Null
         $LASTEXITCODE | Should -Be 0
-        $bin = Join-Path $OcxHome 'symlinks\ocx.sh\ocx\current\bin\ocx.exe'
+        $bin = Join-Path (Get-ExpectedBinDir -OcxHome $OcxHome) 'ocx.exe'
         Test-Path $bin | Should -BeTrue
     }
 
-    It 'PRINT_PATH=1 emits bin dir as final stdout line' {
+    # Mirrors env-knobs.bats:
+    #   "OCX_INSTALL_PRINT_PATH=1 emits bin dir as final stdout line"
+    It 'OCX_INSTALL_PRINT_PATH=1 emits bin dir as final stdout line' {
         $env:OCX_INSTALL_PRINT_PATH = '1'
         $env:OCX_INSTALL_QUIET = '1'
         $out = & pwsh -NoProfile -File $InstallPs1 -Version '0.0.0' 2>$null
         $LASTEXITCODE | Should -Be 0
-        $expected = Join-Path $OcxHome 'symlinks\ocx.sh\ocx\current\bin'
+        $expected = Get-ExpectedBinDir -OcxHome $OcxHome
         ($out | Select-Object -Last 1) | Should -Be $expected
     }
 
-    It 'invalid version → exit 2' {
-        & pwsh -NoProfile -File $InstallPs1 -Version 'foo;rm' 2>$null
-        $LASTEXITCODE | Should -Be 2
+    # Mirrors env-knobs.bats:
+    #   "OCX_INSTALL_QUIET=1 suppresses stderr informational logs"
+    It 'OCX_INSTALL_QUIET=1 suppresses stderr informational logs' {
+        $env:OCX_INSTALL_QUIET = '1'
+        $err = & pwsh -NoProfile -File $InstallPs1 -Version '0.0.0' 2>&1 1>$null
+        $LASTEXITCODE | Should -Be 0
+        ($err | Out-String) | Should -Not -Match 'Detected platform'
     }
 
-    It '404 → exit 3' {
-        $env:OCX_INSTALL_BASE_URL = "http://127.0.0.1:$Port/no-such"
+    # Mirrors env-knobs.bats:
+    #   "stderr discipline: stdout is empty on success without PRINT_PATH"
+    It 'stderr discipline: stdout is empty on success without PRINT_PATH' {
+        $out = & pwsh -NoProfile -File $InstallPs1 -Version '0.0.0' 2>$null
+        $LASTEXITCODE | Should -Be 0
+        ($out | Where-Object { $_ -ne '' }) | Should -BeNullOrEmpty
+    }
+
+    # Mirrors env-knobs.bats: "404 -> exit code 3"
+    It '404 -> exit code 3' {
+        $env:OCX_INSTALL_BASE_URL = "http://127.0.0.1:$Port/no-such-path"
         & pwsh -NoProfile -File $InstallPs1 -Version '0.0.0' 2>$null
         $LASTEXITCODE | Should -Be 3
     }
 
-    It 'checksum mismatch → exit 4' {
-        # Reuse fixture but override sha256 file via a tampered tree.
-        $tamper = Join-Path $FixtureRoot 'tamper'
-        Copy-Item -Recurse -Force (Join-Path $FixtureRoot 'srv') $tamper
-        $sumPath = Join-Path $tamper 'releases\download\v0.0.0\sha256.sum'
-        ('0' * 64 + "  ocx-$Target.zip") | Set-Content -Path $sumPath -Encoding ASCII
-        # Spin a sub-server
-        $tlog = Join-Path $FixtureRoot 't.log'
-        $tproc = Start-Process -FilePath 'python' `
-            -ArgumentList '-u', '-m', 'http.server', '0' `
-            -WorkingDirectory $tamper `
-            -RedirectStandardOutput $tlog -RedirectStandardError $tlog `
-            -PassThru -NoNewWindow
-        $tport = $null
-        for ($i = 0; $i -lt 100; $i++) {
-            if (Test-Path $tlog) {
-                $l = Get-Content $tlog -Raw
-                if ($l -match 'port (\d+)') { $tport = $Matches[1]; break }
-            }
-            Start-Sleep -Milliseconds 100
-        }
+    # Mirrors env-knobs.bats: "checksum mismatch -> exit code 4"
+    It 'checksum mismatch -> exit code 4' {
+        $tamperRoot = Join-Path $FixtureRoot "tamper-$([System.Guid]::NewGuid().ToString('N').Substring(0,8))"
+        $tf = New-OcxFixture -Root $tamperRoot -TamperChecksum
+        $tsrv = Start-FixtureServer -SrvRoot $tf.SrvRoot
         try {
-            $env:OCX_INSTALL_BASE_URL = "http://127.0.0.1:$tport/releases/download"
-            $env:OCX_INSTALL_API_URL = "http://127.0.0.1:$tport/api/repos/ocx-sh/ocx/releases"
+            $env:OCX_INSTALL_BASE_URL = $tsrv.BaseUrl
+            $env:OCX_INSTALL_API_URL = $tsrv.ApiUrl
             & pwsh -NoProfile -File $InstallPs1 -Version '0.0.0' 2>$null
             $LASTEXITCODE | Should -Be 4
         }
         finally {
-            Stop-Process -Id $tproc.Id -Force -ErrorAction SilentlyContinue
-            Remove-Item -Recurse -Force $tamper -ErrorAction SilentlyContinue
+            Stop-FixtureServer -Server $tsrv
+            Remove-Item -Recurse -Force $tamperRoot -ErrorAction SilentlyContinue
         }
     }
 
-    It 'idempotent fast-path returns success without re-download' {
+    # Mirrors env-knobs.bats: "invalid version -> exit code 2"
+    It 'invalid version -> exit code 2' {
+        & pwsh -NoProfile -File $InstallPs1 -Version 'foo;rm' 2>$null
+        $LASTEXITCODE | Should -Be 2
+    }
+
+    # Mirrors env-knobs.bats: "unknown flag -> exit code 2"
+    # The ps1 param() block is the analogue of the sh arg parser; an undeclared
+    # parameter is a parameter-binding error. `pwsh -File` exits non-zero (and
+    # never enters Main, so no #Requires/exit-2 path runs) — assert non-zero.
+    It 'unknown flag -> nonzero exit (param binding error)' {
+        & pwsh -NoProfile -File $InstallPs1 -Bogus 2>$null
+        $LASTEXITCODE | Should -Not -Be 0
+    }
+
+    # Mirrors env-knobs.bats: "OCX_INSTALL_FORCE=1 reinstalls when same version is present".
+    # The idempotent FAST-PATH branch probes the existing binary with
+    # `& ocx.exe version`, which only runs on Windows (the extracted stub has no
+    # +x bit on Linux). On Linux the second run does a full reinstall instead,
+    # but the OBSERVABLE contract the Bats test asserts — exit 0 + identical
+    # print-path on the second run, and exit 0 under FORCE — still holds, so the
+    # scenario stays meaningful cross-platform.
+    It 'OCX_INSTALL_FORCE=1 reinstalls when same version is present' {
         & pwsh -NoProfile -File $InstallPs1 -Version '0.0.0' | Out-Null
         $LASTEXITCODE | Should -Be 0
+        $bin = Join-Path (Get-ExpectedBinDir -OcxHome $OcxHome) 'ocx.exe'
+        Test-Path $bin | Should -BeTrue
+
         $env:OCX_INSTALL_PRINT_PATH = '1'
         $env:OCX_INSTALL_QUIET = '1'
         $out = & pwsh -NoProfile -File $InstallPs1 -Version '0.0.0' 2>$null
         $LASTEXITCODE | Should -Be 0
-        $expected = Join-Path $OcxHome 'symlinks\ocx.sh\ocx\current\bin'
-        ($out | Select-Object -Last 1) | Should -Be $expected
+        ($out | Select-Object -Last 1) | Should -Be (Get-ExpectedBinDir -OcxHome $OcxHome)
+
+        $env:OCX_INSTALL_FORCE = '1'
+        & pwsh -NoProfile -File $InstallPs1 -Version '0.0.0' 2>$null | Out-Null
+        $LASTEXITCODE | Should -Be 0
+    }
+
+    # Mirrors env-knobs.bats: "OCX_INSTALL_FORMAT_URL substitutes {version},{target},{ext},{tag}".
+    It 'OCX_INSTALL_FORMAT_URL substitutes {version},{target},{ext},{tag}' {
+        # Re-publish the fixture archive + checksum under a {version}-keyed
+        # layout (no leading v) so the {version} placeholder is exercised.
+        $custom = Join-Path $FixtureRoot "custom-$([System.Guid]::NewGuid().ToString('N').Substring(0,8))"
+        $cdir = Join-Path $custom "0.0.0/$Target"
+        New-Item -ItemType Directory -Path $cdir -Force | Out-Null
+        $srcDir = Join-Path $FixtureRoot 'srv/releases/download/v0.0.0'
+        Copy-Item (Join-Path $srcDir "ocx-$Target.zip") (Join-Path $cdir "ocx-$Target.zip") -Force
+        Copy-Item (Join-Path $srcDir 'sha256.sum') (Join-Path $cdir 'sums.txt') -Force
+        $csrv = Start-FixtureServer -SrvRoot $custom
+        try {
+            $base = "http://127.0.0.1:$($csrv.Port)"
+            $env:OCX_INSTALL_FORMAT_URL = "$base/{version}/{target}/ocx-{target}.{ext}"
+            $env:OCX_INSTALL_CHECKSUM_FORMAT_URL = "$base/{version}/{target}/sums.txt"
+            & pwsh -NoProfile -File $InstallPs1 -Version '0.0.0' 2>$null | Out-Null
+            $LASTEXITCODE | Should -Be 0
+        }
+        finally {
+            Stop-FixtureServer -Server $csrv
+            Remove-Item -Recurse -Force $custom -ErrorAction SilentlyContinue
+        }
+    }
+
+    # Mirrors env-knobs.bats:
+    #   "latest version resolves via OCX_INSTALL_API_URL override"
+    It 'latest version resolves via OCX_INSTALL_API_URL override' {
+        & pwsh -NoProfile -File $InstallPs1 2>$null | Out-Null
+        $LASTEXITCODE | Should -Be 0
+        $bin = Join-Path (Get-ExpectedBinDir -OcxHome $OcxHome) 'ocx.exe'
+        Test-Path $bin | Should -BeTrue
     }
 }

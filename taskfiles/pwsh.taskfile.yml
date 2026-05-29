@@ -17,7 +17,7 @@ tasks:
         if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
           Install-Module -Name PSScriptAnalyzer -Scope CurrentUser -Force -Repository PSGallery
         }
-        Invoke-ScriptAnalyzer -Path pwsh/install.ps1 -Severity Warning,Error -EnableExit
+        Invoke-ScriptAnalyzer -Path pwsh/install.ps1 -Severity Warning,Error -Settings ./PSScriptAnalyzerSettings.psd1 -EnableExit
       '
 
   format:check:

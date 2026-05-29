@@ -1,0 +1,31 @@
+[metadata]
+lock_version = 1
+declaration_hash_version = 1
+declaration_hash = "sha256:e1fae9b83e17630840618c0d2ced564fbdf34774eec023ab9d19bb8e55a71fe2"
+generated_by = "ocx 0.3.2"
+generated_at = "2026-05-28T20:57:07Z"
+
+[[tool]]
+name = "git-cliff"
+group = "default"
+pinned = "ocx.sh/git-cliff@sha256:4bf5212fbf07f6c8f0cc70311eb079b4c4be0cda32d531eafffcd8dc3edc0ea7"
+
+[[tool]]
+name = "lychee"
+group = "default"
+pinned = "ocx.sh/lychee@sha256:a5687479bd9e80eca98453b07b07a8ec76534f42a3648e0eb1367cf474420c93"
+
+[[tool]]
+name = "shellcheck"
+group = "default"
+pinned = "ocx.sh/shellcheck@sha256:5238fef0a91ac20b8b51b56c2e8152bee56deef1ea606e70c987b4747200a8c3"
+
+[[tool]]
+name = "shfmt"
+group = "default"
+pinned = "ocx.sh/shfmt@sha256:011244340dd2ab9e216c44c0da8ae3e1efede1fad713fa8e2e2d290af52f2e7b"
+
+[[tool]]
+name = "task"
+group = "default"
+pinned = "ocx.sh/go-task@sha256:fcfad89eae0672b309b5bcc7bb25e592cab244296dd9885233631b95da1ee41c"

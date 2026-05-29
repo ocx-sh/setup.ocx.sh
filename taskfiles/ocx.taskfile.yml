@@ -4,12 +4,16 @@
 # namespace (e.g., `shellcheck:`, `shfmt:`) — callers interact with
 # the tool, not with OCX directly.
 #
+# `ocx run NAME -- BINARY ...` composes the project toolchain env. NAME is the
+# binding declared in ocx.toml [tools] (ocx run takes binding NAMES, not
+# package refs). The package ref (e.g. ocx.sh/shfmt:3) lives ONLY in ocx.toml.
+#
 # Root taskfile registers tools:
 #
 #   shellcheck:
 #     taskfile: ./taskfiles/ocx.taskfile.yml
 #     internal: true
-#     vars: { PACKAGE: 'ocx.sh/shellcheck:0.11', TOOL: shellcheck, GLOB: '*.sh' }
+#     vars: { NAME: shellcheck, TOOL: shellcheck, GLOB: '*.sh' }
 #
 # Subsystem taskfiles call the tool:
 #
@@ -18,9 +22,9 @@
 #     vars: { ARGS: '-d -i 4 -ci' }                 # check mode
 #
 # Identity vars (set at include time):
-#   PACKAGE — OCX package reference
-#   TOOL    — binary name
-#   GLOB    — git ls-files glob pattern
+#   NAME — ocx.toml [tools] binding name (passed to `ocx run`)
+#   TOOL — binary name
+#   GLOB — git ls-files glob pattern
 
 version: '3'
 
@@ -28,11 +32,11 @@ tasks:
   exec:
     internal: true
     requires:
-      vars: [PACKAGE, TOOL, GLOB]
+      vars: [NAME, TOOL, GLOB]
     preconditions:
       - sh: '[ -n "$(git ls-files "{{.GLOB}}")" ]'
         msg: 'No {{.GLOB}} files found, skipping {{.TOOL}}'
-    cmd: ocx exec --self {{.PACKAGE}} -- {{.TOOL}} {{.ARGS}} {{.FILES}}
+    cmd: ocx run {{.NAME}} -- {{.TOOL}} {{.ARGS}} {{.FILES}}
     vars:
       ARGS: '{{.ARGS | default ""}}'
       FILES:
@@ -41,7 +45,7 @@ tasks:
   exec:no-files:
     internal: true
     requires:
-      vars: [PACKAGE, TOOL]
-    cmd: ocx exec --self {{.PACKAGE}} -- {{.TOOL}} {{.ARGS}}
+      vars: [NAME, TOOL]
+    cmd: ocx run {{.NAME}} -- {{.TOOL}} {{.ARGS}}
     vars:
       ARGS: '{{.ARGS | default ""}}'

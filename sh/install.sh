@@ -20,7 +20,7 @@
 #   3  network / download / API failure
 #   4  checksum mismatch
 #   5  archive extraction failure
-#   6  bootstrap failure
+#   6  bootstrap ('ocx --remote package install') failure
 #   7  unsupported platform / architecture
 
 set -eu
@@ -44,7 +44,15 @@ OCX_INSTALL_CHECKSUM_FORMAT_URL="${OCX_INSTALL_CHECKSUM_FORMAT_URL:-$_default_ch
 unset _default_format_url _default_checksum_format_url
 
 # Behavioral knobs (truthy: 1, true, yes, TRUE, YES)
-OCX_INSTALL_SKIP_BOOTSTRAP="${OCX_INSTALL_SKIP_BOOTSTRAP:-0}"
+#
+# OCX_INSTALL_SKIP_SELF_INIT: when truthy, place the extracted ocx binary at the
+# canonical bin dir as a PLAIN directory (no package-store symlinks/manifests),
+# put it on PATH and emit it for print-path, and SKIP both the networked
+# 'ocx --remote package install' bootstrap AND env-shim/self-activate generation.
+# This is binary-on-PATH only: 'ocx self update' will NOT manage such an install.
+# It is the CI/GitLab path. Profile modification stays controlled by
+# OCX_NO_MODIFY_PATH independently.
+OCX_INSTALL_SKIP_SELF_INIT="${OCX_INSTALL_SKIP_SELF_INIT:-0}"
 OCX_INSTALL_PRINT_PATH="${OCX_INSTALL_PRINT_PATH:-0}"
 OCX_INSTALL_FORCE="${OCX_INSTALL_FORCE:-0}"
 OCX_INSTALL_QUIET="${OCX_INSTALL_QUIET:-0}"
@@ -121,6 +129,16 @@ test_windows_posix() {
     esac
 }
 
+# Convert a POSIX path to a native Windows path on Cygwin/MSYS/MinGW (where the
+# path is embedded into env files consumed by native tooling). No-op elsewhere.
+to_native_path() {
+    if test_windows_posix && check_cmd cygpath; then
+        cygpath -w "$1"
+    else
+        printf '%s' "$1"
+    fi
+}
+
 # TTY/color detection — bold-only, respects NO_COLOR (https://no-color.org/)
 # Color goes to stderr alongside the text it decorates.
 if [ -t 2 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -168,7 +186,8 @@ ENVIRONMENT (CI / mirror configuration, Bazelisk-style):
     OCX_INSTALL_API_URL           Release-list API URL (latest version lookup)
     OCX_INSTALL_FORMAT_URL        Template: placeholders {version},{tag},{target},{ext}
     OCX_INSTALL_CHECKSUM_FORMAT_URL  Template for sha256.sum URL
-    OCX_INSTALL_SKIP_BOOTSTRAP    1 = skip 'ocx --remote install' bootstrap
+    OCX_INSTALL_SKIP_SELF_INIT    1 = drop binary on PATH only; skip 'ocx --remote
+                                  package install' bootstrap + env-shim generation
     OCX_INSTALL_PRINT_PATH        1 = emit absolute bin dir on final stdout line
     OCX_INSTALL_FORCE             1 = reinstall even if same version is present
     OCX_INSTALL_QUIET             1 = suppress informational logs (warn/err remain)
@@ -227,6 +246,16 @@ detect_target() {
 
 # --- Download utilities ---
 
+# wget TLS fail-closed gate: refuse to proceed over plaintext. wget has no
+# universal "https-only" flag, so we reject non-https URLs ourselves before
+# any request leaves the machine.
+assert_https_url() {
+    case "$1" in
+        https://*) return 0 ;;
+        *) err "refusing insecure (non-https) URL: $1" 3 ;;
+    esac
+}
+
 detect_downloader() {
     if [ -n "$OCX_INSTALL_DOWNLOADER" ]; then
         case "$OCX_INSTALL_DOWNLOADER" in
@@ -264,29 +293,70 @@ download_to_file() {
     local _url="$1" _dest="$2"
 
     if [ "$_downloader" = "curl" ]; then
-        curl --tlsv1.2 -fsSL -o "$_dest" "$_url"
+        curl --proto '=https' --tlsv1.2 -fsSL -o "$_dest" "$_url"
     else
-        wget -q -O "$_dest" "$_url"
+        assert_https_url "$_url"
+        # --https-only refuses a redirect to http:// (assert_https_url only
+        # vets the INITIAL URL; wget follows up to 20 redirects). TLSv1_2 floor.
+        wget --secure-protocol=TLSv1_2 --https-only -q -O "$_dest" "$_url"
     fi
 }
 
 download() {
     if [ "$_downloader" = "curl" ]; then
-        curl --tlsv1.2 -fsSL "$1"
+        curl --proto '=https' --tlsv1.2 -fsSL "$1"
     else
-        wget -qO- "$1"
+        assert_https_url "$1"
+        # See download_to_file: --https-only blocks redirect downgrade to http.
+        wget --secure-protocol=TLSv1_2 --https-only -qO- "$1"
     fi
 }
 
+# Write the GitHub auth credential to a 0600 temp file so the token never
+# appears in the process argument list (visible via 'ps'). curl reads it via
+# '-H @file'; wget reads it via '--config' (wgetrc 'header =' directive).
+# The file is removed by the caller.
+write_token_header_file() {
+    local _hdr
+    _hdr=$(mktemp "${_tmpdir:-/tmp}/ocx-hdr.XXXXXX") || err "failed to create temp header file" 3
+    chmod 600 "$_hdr"
+    if [ "$_downloader" = "curl" ]; then
+        printf 'Authorization: token %s\n' "${GITHUB_TOKEN}" >"$_hdr"
+    else
+        printf 'header = Authorization: token %s\n' "${GITHUB_TOKEN}" >"$_hdr"
+    fi
+    printf '%s' "$_hdr"
+}
+
 download_api() {
-    local _url="$1"
+    local _url="$1" _hdr _out _rc
 
     if [ -n "${GITHUB_TOKEN:-}" ]; then
+        _hdr=$(write_token_header_file)
+        # Register the 0600 token file for trap cleanup so it is removed even if
+        # the shell aborts here (defence-in-depth alongside the inline rm). The
+        # curl/wget call is wrapped as an 'if' CONDITION so that a download
+        # failure under 'set -e' does NOT abort at the assignment and leak the
+        # token file — the assignment status is captured cleanly via $?.
+        _api_hdr_file="$_hdr"
+        _rc=0
         if [ "$_downloader" = "curl" ]; then
-            curl --tlsv1.2 -fsSL -H "Authorization: token ${GITHUB_TOKEN}" "$_url"
+            if ! _out=$(curl --proto '=https' --tlsv1.2 -fsSL -H "@${_hdr}" "$_url"); then
+                _rc=$?
+            fi
         else
-            wget -q --header="Authorization: token ${GITHUB_TOKEN}" -O- "$_url"
+            assert_https_url "$_url"
+            # --https-only blocks a redirect downgrade to http:// (token would
+            # otherwise leak over plaintext); TLSv1_2 floor matches curl.
+            if ! _out=$(wget --secure-protocol=TLSv1_2 --https-only -q \
+                --config="$_hdr" -O- "$_url"); then
+                _rc=$?
+            fi
         fi
+        ignore rm -f "$_hdr"
+        _api_hdr_file=""
+        [ "$_rc" -eq 0 ] || return "$_rc"
+        printf '%s' "$_out"
     else
         download "$_url"
     fi
@@ -307,7 +377,10 @@ verify_checksum() {
         return 0
     fi
 
-    _expected=$(grep -F "$_file" "$_dir/sha256.sum" | awk '{print $1}')
+    # Exact field match: second column equals the file (stripping a leading '*'
+    # that some sha256sum variants prepend for binary mode). Avoids the
+    # substring collisions a loose 'grep -F' would allow.
+    _expected=$(awk -v f="$_file" '{ n=$2; sub(/^\*/, "", n); if (n == f) { print $1; exit } }' "$_dir/sha256.sum")
     if [ -z "$_expected" ]; then
         err "checksum for $_file not found in sha256.sum" 4
     fi
@@ -322,6 +395,67 @@ verify_checksum() {
     fi
 
     say "Checksum verified."
+}
+
+# --- Safe archive extraction ---
+
+# Two-pass extraction. Pass 1: list the archive and reject any entry that would
+# escape the destination via an absolute path, a ".." traversal component, or a
+# symlink/hardlink whose target escapes the tree. Pass 2: extract with
+# ownership/permission/overwrite hardening flags. We do NOT rely on tar's own
+# ".." rejection as the primary guard — the scans below are authoritative.
+#
+# Pass 1 runs over 'tar --list' (member NAMES only, one per line, no column
+# parsing) so that names containing spaces (e.g. "keep/../../pwned thing")
+# cannot smuggle a ".." past a substring-after-last-space parse. The grep
+# pattern matches ".." only as a whole path component, or a leading "/", so
+# legitimate names like "ocx..notes" are not false-rejected.
+#
+# Pass 2 runs over 'tar -tvf' to expose symlink/hardlink targets ("link ->
+# target"), field-splitting on ' -> ' and rejoining fields 2..NF so targets that
+# themselves contain ' -> ' survive intact, then walking '/'-split components and
+# tracking depth so absolute, parent-prefix, AND middle-relative escapes
+# (e.g. "subdir/../../etc/passwd") are all caught.
+safe_extract() {
+    local _archive="$1" _dest="$2" _bad_entry _bad_target
+
+    # Pass 1: member-name traversal scan. Reject ".." as a whole path component
+    # (delimited by start-of-string, "/", or end-of-string) or any leading "/".
+    _bad_entry=$(tar --list -f "$_archive" 2>/dev/null |
+        grep -E '(^|/)\.\.(/|$)|^/' || true)
+    if [ -n "$_bad_entry" ]; then
+        err "archive contains unsafe path: $_bad_entry" 5
+    fi
+
+    # Pass 2: symlink/hardlink target escape scan.
+    _bad_target=$(tar -tvf "$_archive" 2>/dev/null |
+        awk -F ' -> ' '
+            /->/ {
+                target = ""
+                for (i = 2; i <= NF; i++) target = target (i == 2 ? "" : " -> ") $i
+                # Absolute target — always rejected.
+                if (substr(target, 1, 1) == "/") { print target; next }
+                # Walk components, tracking resolved depth from the link dir.
+                n = split(target, parts, "/")
+                depth = 0
+                for (j = 1; j <= n; j++) {
+                    if (parts[j] == "" || parts[j] == ".") continue
+                    if (parts[j] == "..") {
+                        depth--
+                        if (depth < 0) { print target; next }
+                    } else {
+                        depth++
+                    }
+                }
+            }
+        ' || true)
+    if [ -n "$_bad_target" ]; then
+        err "archive contains escaping link target: $_bad_target" 5
+    fi
+
+    tar xf "$_archive" -C "$_dest" \
+        --no-same-owner --no-same-permissions --no-overwrite-dir 2>/dev/null ||
+        err "failed to extract ${_archive} — ensure tar and xz-utils are installed" 5
 }
 
 # --- Version resolution ---
@@ -355,52 +489,143 @@ get_latest_version() {
 
 # --- Shell environment files ---
 
+# Canonical CLI bin dir relative to OCX_HOME (real on-disk store layout):
+#   $OCX_HOME/symlinks/ocx.sh/ocx/cli/current/content/bin
+OCX_BIN_SUBPATH="symlinks/ocx.sh/ocx/cli/current/content/bin"
+
+# Remove the legacy extensionless "$OCX_HOME/env" file. Earlier installers wrote
+# it; it is now superseded by per-shell env.* shims and is known-stale.
+remove_legacy_env_file() {
+    local _ocx_home="${OCX_HOME:-$HOME/.ocx}"
+    if [ -f "$_ocx_home/env" ]; then
+        ignore rm -f "$_ocx_home/env"
+    fi
+}
+
+# Generate the managed per-shell env shims. Each is a thin shim that, at shell
+# startup, delegates to 'ocx self activate --shell=<shell>' (PATH prepend +
+# completions + 'ocx --global env'), guarded by _OCX_ENV_LOADED so re-sourcing
+# is a no-op. The native path of the bin dir is baked in so PATH works even
+# before the binary itself runs.
 create_env_file() {
     local _ocx_home="${OCX_HOME:-$HOME/.ocx}"
+    local _bin_dir _bin_native
 
     mkdir -p "$_ocx_home"
+    _bin_dir="${_ocx_home}/${OCX_BIN_SUBPATH}"
+    _bin_native=$(to_native_path "$_bin_dir")
 
-    cat >"$_ocx_home/env" <<'ENVEOF'
+    remove_legacy_env_file
+
+    # POSIX (sh/dash/bash/zsh/ksh) -> env.sh
+    cat >"$_ocx_home/env.sh" <<ENVEOF
 #!/bin/sh
 # OCX shell environment — generated by install.sh
 # Sourced by your shell profile to add OCX to PATH and enable completions.
 # Manual changes will be overwritten on reinstall.
-_ocx_home="${OCX_HOME:-$HOME/.ocx}"
-export PATH="${_ocx_home}/symlinks/ocx.sh/ocx/current/bin:$PATH"
-_ocx_bin="${_ocx_home}/symlinks/ocx.sh/ocx/current/bin/ocx"
-if [ -x "$_ocx_bin" ]; then
-  eval "$("$_ocx_bin" --offline shell profile load 2>/dev/null)" 2>/dev/null || true
-  eval "$("$_ocx_bin" --offline shell completion 2>/dev/null)" 2>/dev/null || true
+if [ -z "\${_OCX_ENV_LOADED:-}" ]; then
+  _OCX_ENV_LOADED=1
+  export _OCX_ENV_LOADED
+  case ":\${PATH}:" in
+    *:"${_bin_native}":*) ;;
+    *) export PATH="${_bin_native}:\${PATH}" ;;
+  esac
+  _ocx_bin="${_bin_native}/ocx"
+  if [ -x "\$_ocx_bin" ]; then
+    eval "\$("\$_ocx_bin" self activate --shell=sh 2>/dev/null)" 2>/dev/null || true
+  fi
+  unset _ocx_bin
 fi
-unset _ocx_home _ocx_bin
+ENVEOF
+
+    # fish -> env.fish
+    cat >"$_ocx_home/env.fish" <<ENVEOF
+# OCX shell environment — generated by install.sh
+if not set -q _OCX_ENV_LOADED
+  set -gx _OCX_ENV_LOADED 1
+  if not contains "${_bin_native}" \$PATH
+    set -gx PATH "${_bin_native}" \$PATH
+  end
+  set -l _ocx_bin "${_bin_native}/ocx"
+  if test -x "\$_ocx_bin"
+    "\$_ocx_bin" self activate --shell=fish 2>/dev/null | source
+  end
+end
+ENVEOF
+
+    # nushell -> env.nu
+    cat >"$_ocx_home/env.nu" <<ENVEOF
+# OCX shell environment — generated by install.sh
+if "_OCX_ENV_LOADED" not-in \$env {
+  \$env._OCX_ENV_LOADED = "1"
+  if ("${_bin_native}" not-in \$env.PATH) {
+    \$env.PATH = (\$env.PATH | prepend "${_bin_native}")
+  }
+  let _ocx_bin = "${_bin_native}/ocx"
+  if (\$_ocx_bin | path exists) {
+    ^\$_ocx_bin self activate --shell=nushell | save -f \${nu.temp-path}/ocx-activate.nu
+    source \${nu.temp-path}/ocx-activate.nu
+  }
+}
+ENVEOF
+
+    # elvish -> env.elv
+    cat >"$_ocx_home/env.elv" <<ENVEOF
+# OCX shell environment — generated by install.sh
+if (not (has-env _OCX_ENV_LOADED)) {
+  set-env _OCX_ENV_LOADED 1
+  if (not (has-value \$paths "${_bin_native}")) {
+    set paths = ["${_bin_native}" \$@paths]
+  }
+  var _ocx_bin = "${_bin_native}/ocx"
+  if (path:is-regular \$_ocx_bin) {
+    eval (\$_ocx_bin self activate --shell=elvish | slurp)
+  }
+}
+ENVEOF
+
+    # powershell -> env.ps1
+    cat >"$_ocx_home/env.ps1" <<ENVEOF
+# OCX shell environment — generated by install.sh
+if (-not \$env:_OCX_ENV_LOADED) {
+  \$env:_OCX_ENV_LOADED = "1"
+  if (\$env:PATH -notlike "*${_bin_native}*") {
+    \$env:PATH = "${_bin_native}" + [IO.Path]::PathSeparator + \$env:PATH
+  }
+  \$_ocx_bin = "${_bin_native}/ocx"
+  if (Test-Path \$_ocx_bin) {
+    & \$_ocx_bin self activate --shell=powershell | Out-String | Invoke-Expression
+  }
+}
 ENVEOF
 }
 
+# Fish loads env.fish through its conf.d autoload dir.
 create_fish_config() {
-    local _fish_conf_dir
+    local _ocx_home="${OCX_HOME:-$HOME/.ocx}"
+    local _fish_conf_dir _env_fish
 
     _fish_conf_dir="${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d"
     mkdir -p "$_fish_conf_dir"
 
-    cat >"$_fish_conf_dir/ocx.fish" <<'FISHEOF'
+    _env_fish=$(to_native_path "$_ocx_home/env.fish")
+
+    cat >"$_fish_conf_dir/ocx.fish" <<FISHEOF
 # OCX shell environment — generated by install.sh
-# Guarded so that deleting $OCX_HOME does not error on every new fish session.
-set -l _ocx_home (set -q OCX_HOME; and echo $OCX_HOME; or echo $HOME/.ocx)
-if test -d "$_ocx_home"
-  fish_add_path --path "$_ocx_home/symlinks/ocx.sh/ocx/current/bin"
-  set -l _ocx_bin "$_ocx_home/symlinks/ocx.sh/ocx/current/bin/ocx"
-  if test -x "$_ocx_bin"
-    "$_ocx_bin" --offline shell profile load --shell fish 2>/dev/null | source
-    "$_ocx_bin" --offline shell completion --shell fish 2>/dev/null | source
-  end
+# Guarded so that deleting \$OCX_HOME does not error on every new fish session.
+if test -f "${_env_fish}"
+  source "${_env_fish}"
 end
 FISHEOF
 }
 
 # --- Shell profile modification ---
 
+# Emit the profile files OCX should write its source-block into for the active
+# shell. Canon targets BOTH the login profile and the interactive rc so the
+# env shim loads in either context. One path per line.
 detect_profile() {
-    local _shell_name
+    local _shell_name _zdotdir
 
     _shell_name=$(basename "${SHELL:-sh}")
 
@@ -411,12 +636,17 @@ detect_profile() {
             else
                 echo "$HOME/.profile"
             fi
+            echo "$HOME/.bashrc"
             ;;
         zsh)
-            echo "$HOME/.zshenv"
-            ;;
-        fish)
-            echo ""
+            _zdotdir="${ZDOTDIR:-$HOME}"
+            # Filesystem-root write guard: never write into "/" if ZDOTDIR is
+            # empty/misconfigured.
+            if [ "$_zdotdir" = "/" ] || [ -z "$_zdotdir" ]; then
+                _zdotdir="$HOME"
+            fi
+            echo "$_zdotdir/.zprofile"
+            echo "$_zdotdir/.zshrc"
             ;;
         *)
             echo "$HOME/.profile"
@@ -424,39 +654,129 @@ detect_profile() {
     esac
 }
 
-modify_shell_profile() {
-    local _profile _source_line _ocx_home _env_path _shell_name
+# Strip stale OCX lines from a profile: old extensionless "$OCX_HOME/env" source
+# lines and old "$OCX_HOME/init.<shell>" source lines that predate the env.*
+# shim layout. Idempotent; leaves the BEGIN/END block (added separately) intact.
+remove_legacy_profile_lines() {
+    local _profile="$1" _tmp
 
-    _ocx_home="${OCX_HOME:-$HOME/.ocx}"
-    _env_path="$_ocx_home/env"
+    [ -f "$_profile" ] || return 0
+    grep -q -e '\.ocx/env"' -e '\.ocx/init\.' -e '/env"; then \. ' "$_profile" 2>/dev/null || return 0
 
-    if [ "$_ocx_home" = "$HOME/.ocx" ]; then
-        # shellcheck disable=SC2016
-        _source_line='if [ -f "$HOME/.ocx/env" ]; then . "$HOME/.ocx/env"; fi'
-    else
-        _source_line="if [ -f \"$_env_path\" ]; then . \"$_env_path\"; fi"
-    fi
+    _tmp=$(mktemp "${_tmpdir:-/tmp}/ocx-prof.XXXXXX") || return 0
+    grep -v \
+        -e '\.ocx/env"' \
+        -e '\.ocx/init\.' \
+        "$_profile" >"$_tmp" 2>/dev/null || :
+    cat "$_tmp" >"$_profile"
+    ignore rm -f "$_tmp"
+}
 
-    _shell_name=$(basename "${SHELL:-sh}")
+# Append the idempotent "# BEGIN ocx" / "# END ocx" source block to a profile.
+write_profile_block() {
+    local _profile="$1" _source_line="$2"
 
-    if [ "$_shell_name" = "fish" ]; then
-        create_fish_config
-        say "Created Fish configuration."
-        return
-    fi
+    remove_legacy_profile_lines "$_profile"
 
-    _profile=$(detect_profile)
-    if [ -z "$_profile" ]; then
-        return
-    fi
-
-    if [ -f "$_profile" ] && grep -qF '.ocx/env' "$_profile" 2>/dev/null; then
+    if [ -f "$_profile" ] && grep -qF '# BEGIN ocx' "$_profile" 2>/dev/null; then
         say "Shell profile already configured ($(tildify "$_profile"))."
         return
     fi
 
-    printf '\n# OCX\n%s\n' "$_source_line" >>"$_profile"
+    printf '\n# BEGIN ocx\n%s\n# END ocx\n' "$_source_line" >>"$_profile"
     say "Added OCX to $(tildify "$_profile")"
+}
+
+# Skip-self-init profile path: no env.sh shim exists, so write a profile block
+# that prepends the canonical bin dir to PATH directly. Targets login +
+# interactive profiles like modify_shell_profile.
+modify_shell_profile_binary_only() {
+    local _ocx_home="$1" _bin_dir _bin_native _source_line _profile
+
+    _bin_dir="$_ocx_home/$OCX_BIN_SUBPATH"
+    _bin_native=$(to_native_path "$_bin_dir")
+    _source_line="case \":\${PATH}:\" in *:\"$_bin_native\":*) ;; *) export PATH=\"$_bin_native:\${PATH}\" ;; esac"
+
+    detect_profile | while IFS= read -r _profile; do
+        [ -n "$_profile" ] || continue
+        write_profile_block "$_profile" "$_source_line"
+    done
+}
+
+modify_shell_profile() {
+    local _profile _source_line _ocx_home _env_path _shell_name
+
+    _ocx_home="${OCX_HOME:-$HOME/.ocx}"
+    _env_path="$_ocx_home/env.sh"
+
+    if [ "$_ocx_home" = "$HOME/.ocx" ]; then
+        # shellcheck disable=SC2016
+        _source_line='[ -f "$HOME/.ocx/env.sh" ] && . "$HOME/.ocx/env.sh"'
+    else
+        _source_line="[ -f \"$_env_path\" ] && . \"$_env_path\""
+    fi
+
+    _shell_name=$(basename "${SHELL:-sh}")
+
+    # fish and nushell load their shims through autoload dirs, not a profile
+    # block. elvish gets a rc.elv block.
+    case "$_shell_name" in
+        fish)
+            create_fish_config
+            say "Created Fish configuration."
+            return
+            ;;
+        nu)
+            create_nu_config
+            say "Created Nushell configuration."
+            return
+            ;;
+        elvish)
+            modify_elvish_rc
+            return
+            ;;
+    esac
+
+    detect_profile | while IFS= read -r _profile; do
+        [ -n "$_profile" ] || continue
+        write_profile_block "$_profile" "$_source_line"
+    done
+}
+
+# Nushell loads env.nu through its vendor autoload dir.
+create_nu_config() {
+    local _ocx_home="${OCX_HOME:-$HOME/.ocx}"
+    local _nu_autoload _env_nu
+
+    _nu_autoload="${XDG_CONFIG_HOME:-$HOME/.config}/nushell/vendor/autoload"
+    mkdir -p "$_nu_autoload"
+
+    _env_nu=$(to_native_path "$_ocx_home/env.nu")
+
+    cat >"$_nu_autoload/ocx.nu" <<NUEOF
+# OCX shell environment — generated by install.sh
+source "${_env_nu}"
+NUEOF
+}
+
+# Elvish sources env.elv via a BEGIN/END block in rc.elv.
+modify_elvish_rc() {
+    local _ocx_home="${OCX_HOME:-$HOME/.ocx}"
+    local _rc _env_elv _source_line
+
+    _rc="${XDG_CONFIG_HOME:-$HOME/.config}/elvish/rc.elv"
+    mkdir -p "$(dirname "$_rc")"
+
+    _env_elv=$(to_native_path "$_ocx_home/env.elv")
+    _source_line="eval (slurp < \"${_env_elv}\")"
+
+    if [ -f "$_rc" ] && grep -qF '# BEGIN ocx' "$_rc" 2>/dev/null; then
+        say "Shell profile already configured ($(tildify "$_rc"))."
+        return
+    fi
+
+    printf '\n# BEGIN ocx\n%s\n# END ocx\n' "$_source_line" >>"$_rc"
+    say "Added OCX to $(tildify "$_rc")"
 }
 
 # --- Bootstrap: OCX installs itself ---
@@ -465,28 +785,29 @@ bootstrap_ocx() {
     local _bin="$1" _version="$2"
 
     say "Bootstrapping OCX into its own package store..."
-    if ! "$_bin" --remote install --select "ocx.sh/ocx:$_version"; then
-        err "bootstrap failed: 'ocx --remote install --select ocx.sh/ocx:$_version'
+    # --select is a boolean "set as current" flag; the package id is positional.
+    if ! "$_bin" --remote package install --select "ocx.sh/ocx/cli:$_version"; then
+        err "bootstrap failed: 'ocx --remote package install --select ocx.sh/ocx/cli:$_version'
   Ensure ocx v${_version} is published to the ocx.sh registry.
   If this is a first install and the registry is not yet populated,
   please wait for the release pipeline to complete.
   To skip the bootstrap step (offline / air-gapped installs), set
-  OCX_INSTALL_SKIP_BOOTSTRAP=1." 6
+  OCX_INSTALL_SKIP_SELF_INIT=1." 6
     fi
 }
 
-# Skip-bootstrap path: place the extracted binary at the canonical
-# symlinks/.../current/bin location so downstream consumers find it.
-# This is the air-gapped / GLF-build path.
+# Skip-self-init path: place the extracted binary at the canonical bin dir as a
+# PLAIN directory (no fabricated package-store symlinks/manifests), so it is on
+# PATH for downstream consumers. This is binary-on-PATH only: 'ocx self update'
+# will NOT manage such an install. It is the CI/GitLab path.
 install_without_bootstrap() {
-    local _bin="$1" _version="$2" _ocx_home="$3"
-    local _store="$_ocx_home/symlinks/ocx.sh/ocx"
+    local _bin="$1" _ocx_home="$2"
+    local _bin_dir="$_ocx_home/$OCX_BIN_SUBPATH"
 
-    say "Installing without bootstrap (OCX_INSTALL_SKIP_BOOTSTRAP=1)..."
-    mkdir -p "$_store/$_version/bin"
-    cp -f "$_bin" "$_store/$_version/bin/ocx"
-    chmod +x "$_store/$_version/bin/ocx"
-    ln -sfn "$_version" "$_store/current"
+    say "Installing without self-init (OCX_INSTALL_SKIP_SELF_INIT=1)..."
+    mkdir -p "$_bin_dir"
+    cp -f "$_bin" "$_bin_dir/ocx"
+    chmod +x "$_bin_dir/ocx"
 }
 
 # --- Success message ---
@@ -497,7 +818,7 @@ print_success() {
     is_truthy "$OCX_INSTALL_QUIET" && return 0
 
     _ocx_home="${OCX_HOME:-$HOME/.ocx}"
-    _env_display=$(tildify "$_ocx_home/env")
+    _env_display=$(tildify "$_ocx_home/env.sh")
 
     if [ -n "$_old_version" ] && [ "$_old_version" != "$_version" ]; then
         printf '\n  %socx upgraded: %s -> %s%s\n' "$_bold" "$_old_version" "$_version" "$_reset" >&2
@@ -509,11 +830,11 @@ print_success() {
 
   To get started, restart your shell or run:
 
-    . "$_ocx_home/env"
+    . "$_env_display"
 
   Then verify with:
 
-    ocx info
+    ocx about
 
   To uninstall, remove the OCX home directory:
 
@@ -525,9 +846,50 @@ EOF
 # --- Temp directory cleanup ---
 
 cleanup() {
+    # Remove the 0600 GitHub token header file if download_api was interrupted
+    # mid-flight (defence-in-depth: download_api also rm's it inline on the
+    # normal path, then clears this var).
+    if [ -n "${_api_hdr_file:-}" ]; then
+        ignore rm -f "$_api_hdr_file"
+    fi
     if [ -n "${_tmpdir:-}" ]; then
         ignore rm -rf "$_tmpdir"
     fi
+}
+
+# --- OCX_HOME validation ---
+
+# OCX_HOME is embedded verbatim into the generated env files, and CI may inject
+# mirror config alongside it, so harden it: require an absolute path, reject
+# ".." traversal, and reject shell metacharacters that could break out of the
+# quoting in env.sh / profile source lines.
+assert_safe_ocx_home() {
+    local _home="$1"
+
+    case "$_home" in
+        /*) ;;
+        *) err "OCX_HOME must be an absolute path (got: $_home)" 2 ;;
+    esac
+
+    case "$_home" in
+        */../* | */..) err "OCX_HOME must not contain '..' (got: $_home)" 2 ;;
+        ../*) err "OCX_HOME must not contain '..' (got: $_home)" 2 ;;
+    esac
+
+    # Reject shell metacharacters. $_home is embedded literally into the
+    # generated env.* shims and the profile source line, so a CI-injected
+    # OCX_HOME must not be able to break out of the quoted context. The newline
+    # case uses a literal embedded newline inside the pattern (POSIX-portable;
+    # avoids the non-POSIX $'\n'). Mirrors canon's metachar set.
+    case "$_home" in
+        *'"'* | *'$'* | *'`'* | *';'* | *'&'* | *'|'* | *'<'* | *'>'* | *'('* | *')'* | *'
+'*)
+            err "OCX_HOME contains characters unsafe for shell embedding (got: $_home)" 2
+            ;;
+    esac
+    case "$_home" in
+        *\\*) err "OCX_HOME contains characters unsafe for shell embedding (got: $_home)" 2 ;;
+    esac
 }
 
 # --- Main ---
@@ -572,6 +934,7 @@ main() {
     detect_downloader
 
     _ocx_home="${OCX_HOME:-$HOME/.ocx}"
+    assert_safe_ocx_home "$_ocx_home"
 
     _target=$(detect_target)
     say "Detected platform: $_target"
@@ -589,7 +952,7 @@ main() {
         err "invalid version format: $_version (expected semver like 1.2.3)" 2
     fi
 
-    _bin_dir="${_ocx_home}/symlinks/ocx.sh/ocx/current/bin"
+    _bin_dir="${_ocx_home}/${OCX_BIN_SUBPATH}"
     _old_version=""
     if [ -x "$_bin_dir/ocx" ]; then
         _old_version=$("$_bin_dir/ocx" version 2>/dev/null || echo "")
@@ -627,10 +990,10 @@ main() {
 
     verify_checksum "$_tmpdir" "$_archive"
 
-    if ! tar xf "$_tmpdir/$_archive" -C "$_tmpdir" 2>/dev/null; then
-        err "failed to extract ${_archive} — ensure tar and xz-utils are installed" 5
-    fi
+    safe_extract "$_tmpdir/$_archive" "$_tmpdir"
 
+    # Keep BOTH layouts: nested (ocx-TARGET/ocx) for older archives and flat
+    # (ocx at archive root) which is the real cargo-dist release layout.
     if [ -f "$_tmpdir/ocx-${_target}/ocx" ]; then
         _bin="$_tmpdir/ocx-${_target}/ocx"
     elif [ -f "$_tmpdir/ocx" ]; then
@@ -660,28 +1023,39 @@ main() {
         esac
     fi
 
-    if is_truthy "$OCX_INSTALL_SKIP_BOOTSTRAP"; then
-        install_without_bootstrap "$_bin" "$_version" "$_ocx_home"
+    if is_truthy "$OCX_INSTALL_SKIP_SELF_INIT"; then
+        # CI/GitLab path: drop the binary on PATH only. Skip the networked
+        # bootstrap AND env-shim/self-activate generation. Profile modification
+        # remains independently controlled by OCX_NO_MODIFY_PATH below.
+        install_without_bootstrap "$_bin" "$_ocx_home"
+        say "Installed to $(tildify "${_bin_dir}/ocx")"
     else
         bootstrap_ocx "$_bin" "$_version"
-    fi
-    say "Installed to $(tildify "${_bin_dir}/ocx")"
+        say "Installed to $(tildify "${_bin_dir}/ocx")"
 
-    create_env_file
+        create_env_file
 
-    if check_cmd fish; then
-        create_fish_config
+        if check_cmd fish; then
+            create_fish_config
+        fi
     fi
 
     if [ "$_no_modify_path" = "1" ]; then
         say "Skipping shell profile modification (--no-modify-path)."
+    elif is_truthy "$OCX_INSTALL_SKIP_SELF_INIT"; then
+        # No env.sh shim exists in skip-self-init mode; only the binary is on
+        # PATH. Prepend the bin dir directly via the profile source block so
+        # interactive shells still find it.
+        modify_shell_profile_binary_only "$_ocx_home"
     else
         modify_shell_profile
     fi
 
     export_github_path
 
-    print_success "$_version" "$_old_version"
+    if ! is_truthy "$OCX_INSTALL_SKIP_SELF_INIT"; then
+        print_success "$_version" "$_old_version"
+    fi
 
     if is_truthy "$OCX_INSTALL_PRINT_PATH"; then
         printf '%s\n' "$_bin_dir"
@@ -690,7 +1064,7 @@ main() {
 
 # Export the OCX bin directory to GITHUB_PATH for GitHub Actions.
 export_github_path() {
-    local _install_path="${OCX_HOME:-$HOME/.ocx}/symlinks/ocx.sh/ocx/current/bin"
+    local _install_path="${OCX_HOME:-$HOME/.ocx}/${OCX_BIN_SUBPATH}"
     if [ -n "${GITHUB_PATH:-}" ]; then
         printf '%s\n' "$_install_path" >>"$GITHUB_PATH" ||
             warn "failed to write to \$GITHUB_PATH"

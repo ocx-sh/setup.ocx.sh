@@ -5,7 +5,7 @@ Thanks for helping land changes to the canonical OCX installer scripts.
 ## Prerequisites
 
 - [Task](https://taskfile.dev) — task runner.
-- [OCX](https://ocx.sh) — bootstraps every linter and test tool used here. After installing OCX, run `task ocx:index-update` once to populate `.ocx/index/`.
+- [OCX](https://ocx.sh) — provisions the linters and test tools used here via its toolchain. Local dev wires it through [direnv](https://direnv.net): `.envrc` runs `eval "$(ocx direnv export)"` so the tools land on PATH on `cd`. After installing OCX, run `task ocx:index-update` once to populate `.ocx/index/`. (CI does not yet use this path — see the note below.)
 - `pwsh` — PowerShell 7+. Needed for Pester tests and PSScriptAnalyzer.
 - `python3` — used by the Bats fixture HTTP server.
 - `docker` with `buildx` and (for non-native arches) QEMU binfmt handlers — required for `tests/docker/`. Run `task docker:qemu:register` to install handlers on Linux hosts.
@@ -43,11 +43,13 @@ The docker matrix downloads real OCX releases from `github.com/ocx-sh/ocx`. Set 
 tests/docker/run.sh fedora linux/arm64 0.5.0
 ```
 
+> **CI toolchain note:** locally, `task` and the linters/test tools come from the OCX toolchain (via direnv). The GitHub Actions workflows do **not** yet dogfood `ocx-sh/setup-ocx` — they currently install each tool ad-hoc. Migrating CI onto `setup-ocx` + `task` is planned, not done; until then keep the pinned versions in the workflows roughly in sync with `ocx.toml` to avoid local/CI drift.
+
 ## Commit conventions
 
-This repo uses Conventional Commits parsed by [git-cliff](https://git-cliff.org/) (see `cliff.toml`). Recognised prefixes:
+This repo uses Conventional Commits parsed by [git-cliff](https://git-cliff.org/) (see `cliff.toml`). The project is still pre-release (no tags yet); the version-bump column describes the mapping that takes effect once versioning starts. Recognised prefixes:
 
-| Prefix | Purpose | Version bump (post-1.0) |
+| Prefix | Purpose | Version bump |
 |---|---|---|
 | `feat:` | New feature | minor |
 | `fix:` | Bug fix | patch |
@@ -68,7 +70,7 @@ The PR workflow runs `cocogitto check-latest-tag-only`; commits that aren't conv
 
 ## Releases
 
-Releases are tag-driven:
+The project is **pre-release** — no tags exist yet, so the first release cuts the initial tag. Releases are tag-driven:
 
 ```sh
 task release:prepare       # git-cliff bump + CHANGELOG + verify

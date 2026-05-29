@@ -9,11 +9,11 @@ version: '3'
 tasks:
   changelog:
     desc: Update CHANGELOG.md from git history
-    cmd: ocx exec --self ocx.sh/git-cliff:2.12 -- git-cliff --output CHANGELOG.md
+    cmd: ocx run git-cliff -- git-cliff --output CHANGELOG.md
 
   changelog:preview:
     desc: Preview unreleased changes
-    cmd: ocx exec --self ocx.sh/git-cliff:2.12 -- git-cliff --unreleased
+    cmd: ocx run git-cliff -- git-cliff --unreleased
 
   prepare:
     desc: Prepare a release (compute version, update changelog, verify, tag locally)
@@ -22,10 +22,10 @@ tasks:
         msg: 'Working tree must be clean'
     vars:
       NEXT_VERSION:
-        sh: ocx exec --self ocx.sh/git-cliff:2.12 -- git-cliff --bumped-version
+        sh: ocx run git-cliff -- git-cliff --bumped-version
     cmds:
       - echo "Next version:{{.NEXT_VERSION}}"
-      - ocx exec --self ocx.sh/git-cliff:2.12 -- git-cliff --tag "{{.NEXT_VERSION}}" -o CHANGELOG.md
+      - ocx run git-cliff -- git-cliff --tag "{{.NEXT_VERSION}}" -o CHANGELOG.md
       - task verify
       - |
         echo ""

@@ -10,14 +10,18 @@ tasks:
   integration:
     desc: Run installer in a single distro/platform combination (DISTRO + PLATFORM)
     requires:
-      vars: [DISTRO, PLATFORM]
+      vars:
+        - name: DISTRO
+          enum: [alpine, fedora, ubuntu]
+        - name: PLATFORM
+          enum: [linux/amd64, linux/arm64]
     preconditions:
       - sh: docker buildx version
         msg: 'docker buildx required (install docker-buildx-plugin or Docker Desktop)'
     cmd: tests/docker/run.sh "{{.DISTRO}}" "{{.PLATFORM}}"
 
   integration:all:
-    desc: Run installer across full matrix (alpine|fedora|ubuntu × linux/amd64|linux/arm64)
+    desc: Run installer across full matrix (alpine|fedora|ubuntu x linux/amd64|linux/arm64)
     cmds:
       - task: integration
         vars: { DISTRO: alpine, PLATFORM: linux/amd64 }

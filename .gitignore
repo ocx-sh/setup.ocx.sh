@@ -1,6 +1,7 @@
 .DS_Store
 .env
 .env.*
+.lycheecache
 *.log
 *.tgz
 *.tar.gz
@@ -10,3 +11,4 @@ node_modules/
 .ocx/
 .task/
 target/
+.serena/

@@ -63,9 +63,9 @@ jobs:
           OCX_NO_MODIFY_PATH=1 sh sh/install.sh $version_arg
       - name: Verify
         run: |
-          export PATH="$HOME/.ocx/symlinks/ocx.sh/ocx/current/bin:$PATH"
+          export PATH="$HOME/.ocx/symlinks/ocx.sh/ocx/cli/current/content/bin:$PATH"
           ocx version
-          test -f "$HOME/.ocx/env"
+          test -f "$HOME/.ocx/env.sh"
 
   install-ps1-windows:
     name: install.ps1 (Windows, real release)
@@ -85,6 +85,6 @@ jobs:
       - name: Verify
         shell: pwsh
         run: |
-          $bin = Join-Path $env:USERPROFILE '.ocx\symlinks\ocx.sh\ocx\current\bin'
+          $bin = Join-Path $env:USERPROFILE '.ocx\symlinks\ocx.sh\ocx\cli\current\content\bin'
           $env:Path = "$bin;$env:Path"
           ocx version

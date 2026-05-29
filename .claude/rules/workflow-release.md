@@ -30,12 +30,14 @@ Both jobs run on every `v*` tag. There is no mirror-to-GitLab step — the GLF l
 
 ## Version policy
 
-- Pre-1.0: minor bump for breaking changes (Cargo/SemVer-style).
-- ≥1.0 (current state, last release `v1.0.0`):
-  - `feat:` → minor
-  - `fix:`, `perf:` → patch
-  - `feat!:` / `fix!:` / `BREAKING CHANGE:` → major
-  - Everything else → no bump
+The project is **pre-release**: there are zero git tags and nothing has shipped yet. The first release will cut the initial tag. Once versioning starts, the conventional-commit → bump mapping is:
+
+- `feat:` → minor
+- `fix:`, `perf:` → patch
+- `feat!:` / `fix!:` / `BREAKING CHANGE:` → major
+- Everything else → no bump
+
+(Pre-1.0 SemVer convention — breaking changes may be folded into minor bumps — is at the maintainer's discretion until the line is settled at the first release.)
 
 ## What never goes in a release commit
 

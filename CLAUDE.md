@@ -2,6 +2,8 @@
 
 Guidance for Claude Code when working in this repository.
 
+> **Obsidian vault:** if `obsidian-ocx` MCP is connected, read vault `Home.md` first for cross-session knowledge.
+
 ## Project
 
 `setup.ocx.sh` is the canonical website hosting the **shell installers** that bring [OCX](https://ocx.sh) to CI runners, developer machines, and Linux servers. Every published path is one of these installers:
@@ -27,7 +29,7 @@ This repo owns those two files (and their release pipeline). The GitHub Action l
 
 ## Commands
 
-All tasks run through [Task](https://taskfile.dev). Tools come from OCX (no local install needed):
+All tasks run through [Task](https://taskfile.dev). Locally, the dev toolchain (linters, test tools) is provisioned by the OCX toolchain via [direnv](https://direnv.net) (`.envrc` runs `eval "$(ocx direnv export)"`) plus Task. CI dogfooding through `ocx-sh/setup-ocx` is being rolled out — today the workflows still install their tools ad-hoc, so the local OCX toolchain and CI can drift.
 
 ```bash
 task verify                                # lint + bats + pester
@@ -61,7 +63,7 @@ This contract is load-bearing for downstream wrappers that do `BIN_DIR=$(./insta
 | 3 | Network / download / API failure |
 | 4 | Checksum mismatch |
 | 5 | Archive extraction failure |
-| 6 | Bootstrap (`ocx --remote install`) failure |
+| 6 | Bootstrap (`ocx --remote package install`) failure |
 | 7 | Unsupported platform / architecture |
 
 Pick the most specific code when calling `err()`. Reusing codes across unrelated failures breaks downstream CI diagnostics.
@@ -79,11 +81,15 @@ Cross-installer parity is enforced manually: any change to `sh/install.sh` must 
 
 ## Releases
 
+This project is **pre-release**: there are zero git tags and nothing has shipped yet. The first release will cut the initial tag.
+
 - Conventional Commits drive versioning via [git-cliff](https://git-cliff.org).
 - `task release:prepare` produces the version commit + tag locally; pushing the tag triggers `.github/workflows/release.yml`.
 - The release workflow does: gh release (git-cliff notes) → `publish-installers` job (rsync via `SETUP_OCX_DEPLOY_KEY`).
 
-| Prefix | Purpose | Version bump (post-1.0) |
+The conventional-commit → version-bump mapping (applies once the project starts versioning):
+
+| Prefix | Purpose | Version bump |
 |---|---|---|
 | `feat:` | New feature | minor |
 | `fix:` | Bug fix | patch |

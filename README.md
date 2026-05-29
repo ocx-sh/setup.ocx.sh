@@ -44,8 +44,11 @@ curl -fsSL https://setup.ocx.sh/sh/0.5.0/install.sh | sh
 # Latest:
 irm https://setup.ocx.sh/pwsh/install.ps1 | iex
 
-# Pinned version:
-& { iex "$(irm https://setup.ocx.sh/pwsh/install.ps1)" } -Version 0.5.0
+# Pinned version (compile to a scriptblock so -Version binds to the param):
+& ([scriptblock]::Create((irm https://setup.ocx.sh/pwsh/install.ps1))) -Version 0.5.0
+
+# Or download first and invoke with the -Version parameter:
+irm https://setup.ocx.sh/pwsh/install.ps1 -OutFile install.ps1; pwsh -File install.ps1 -Version 0.5.0
 ```
 
 ## Configuration
@@ -59,7 +62,7 @@ Both installers read environment variables to override defaults. The `OCX_INSTAL
 | `OCX_INSTALL_API_URL` | GitHub Releases API base | `https://api.github.com/repos/<repo>/releases` |
 | `OCX_INSTALL_FORMAT_URL` | URL template for the archive (`{version}`, `{tag}`, `{target}`, `{ext}`) | `{base}/{tag}/ocx-{target}.{ext}` |
 | `OCX_INSTALL_CHECKSUM_FORMAT_URL` | URL template for `sha256.sum` | `{base}/{tag}/sha256.sum` |
-| `OCX_INSTALL_SKIP_BOOTSTRAP` | Skip `ocx --remote install` after extract (set `1` in air-gapped / offline envs) | `0` |
+| `OCX_INSTALL_SKIP_SELF_INIT` | Skip the networked `ocx --remote package install` self-init after extract; the binary is placed on the OCX bin dir directly so it is on PATH, but the package store is not populated by the install. Set `1` in air-gapped / offline envs. | `0` |
 | `OCX_INSTALL_PRINT_PATH` | Emit the bin dir as the final stdout line | `0` |
 | `OCX_INSTALL_FORCE` | Reinstall even if the target version is already present | `0` |
 | `OCX_INSTALL_QUIET` | Suppress informational stderr output | `0` |
@@ -89,7 +92,7 @@ export PATH="$BIN_DIR:$PATH"
 | 3 | Network / download / API failure |
 | 4 | Checksum mismatch |
 | 5 | Archive extraction failure |
-| 6 | Bootstrap (`ocx --remote install`) failure |
+| 6 | Bootstrap (`ocx --remote package install`) failure |
 | 7 | Unsupported platform / architecture |
 
 ## Development

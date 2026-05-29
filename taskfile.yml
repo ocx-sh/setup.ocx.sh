@@ -12,54 +12,37 @@ includes:
   docker: ./taskfiles/docker.taskfile.yml
   release: ./taskfiles/release.taskfile.yml
   meta: ./taskfiles/meta.taskfile.yml
-  # Tool registrations (backed by ocx.taskfile.yml)
+  # Tool registrations (backed by ocx.taskfile.yml).
+  # NAME is the binding declared in ocx.toml [tools]; `ocx run NAME -- BINARY`
+  # composes the toolchain env. Hallucinated OCX packages (bats, hawkeye,
+  # actionlint) are NOT registered here — they stay system tools behind a
+  # `command -v` precondition (see meta/test taskfiles).
   shellcheck:
     taskfile: ./taskfiles/ocx.taskfile.yml
     internal: true
     vars:
-      PACKAGE: 'ocx.sh/shellcheck:0.11'
+      NAME: shellcheck
       TOOL: shellcheck
       GLOB: '*.sh'
   shfmt:
     taskfile: ./taskfiles/ocx.taskfile.yml
     internal: true
     vars:
-      PACKAGE: 'ocx.sh/shfmt:3'
+      NAME: shfmt
       TOOL: shfmt
       GLOB: '*.sh'
-  bats:
-    taskfile: ./taskfiles/ocx.taskfile.yml
-    internal: true
-    vars:
-      PACKAGE: 'ocx.sh/bats:1.11'
-      TOOL: bats
-      GLOB: '*.bats'
-  hawkeye:
-    taskfile: ./taskfiles/ocx.taskfile.yml
-    internal: true
-    vars:
-      PACKAGE: 'ocx.sh/hawkeye:6'
-      TOOL: hawkeye
-      GLOB: '*'
-  actionlint:
-    taskfile: ./taskfiles/ocx.taskfile.yml
-    internal: true
-    vars:
-      PACKAGE: 'ocx.sh/actionlint:1.7'
-      TOOL: actionlint
-      GLOB: '.github/workflows/*.yml'
   lychee:
     taskfile: ./taskfiles/ocx.taskfile.yml
     internal: true
     vars:
-      PACKAGE: 'ocx.sh/lychee:0'
+      NAME: lychee
       TOOL: lychee
       GLOB: '*.md'
   git-cliff:
     taskfile: ./taskfiles/ocx.taskfile.yml
     internal: true
     vars:
-      PACKAGE: 'ocx.sh/git-cliff:2.12'
+      NAME: git-cliff
       TOOL: git-cliff
       GLOB: 'cliff.toml'
 
@@ -68,7 +51,7 @@ tasks:
     desc: Refresh the OCX tool index lock.
     cmds:
       - rm -rf .ocx/index
-      - ocx index update shellcheck:0.11 shfmt:3 bats:1.11 hawkeye:6 actionlint:1.7 lychee:0 git-cliff:2.12
+      - ocx index update ocx.sh/go-task:3 ocx.sh/shfmt:3 ocx.sh/shellcheck:0.11 ocx.sh/git-cliff:2 ocx.sh/lychee:0
 
   # Two-phase verify: parallel lint, then sequential tests.
   verify:
@@ -97,7 +80,7 @@ tasks:
     desc: Validate publish-installers.sh rsync paths without uploading.
     vars:
       VERSION:
-        sh: 'ocx exec --self ocx.sh/git-cliff:2.12 -- git-cliff --bumped-version 2>/dev/null | sed "s/^v//" || echo "0.0.0-dev"'
+        sh: 'ocx run git-cliff -- git-cliff --bumped-version 2>/dev/null | sed "s/^v//" || echo "0.0.0-dev"'
     cmd: DRY_RUN=1 VERSION={{.VERSION}} SSH_KEY=/dev/null SETUP_OCX_HOST=setup.ocx.sh scripts/publish-installers.sh
 
   format:

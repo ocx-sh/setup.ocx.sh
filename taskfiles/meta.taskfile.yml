@@ -15,11 +15,21 @@ tasks:
 
   actionlint:
     desc: Lint GitHub Actions workflows
-    cmd: ocx exec --self ocx.sh/actionlint:1.7 -- actionlint -color
+    # actionlint is not an OCX-provisionable package; CI uses the action,
+    # locally it must be on PATH.
+    preconditions:
+      - sh: command -v actionlint
+        msg: 'actionlint not on PATH; CI is authoritative'
+    cmd: actionlint -color
 
   hawkeye:
     desc: Verify license headers
-    cmd: ocx exec --self ocx.sh/hawkeye:6 -- hawkeye check
+    # hawkeye is not an OCX-provisionable package; CI uses the action,
+    # locally it must be on PATH.
+    preconditions:
+      - sh: command -v hawkeye
+        msg: 'hawkeye not on PATH; CI is authoritative'
+    cmd: hawkeye check
 
   markdownlint:
     desc: Lint Markdown files
@@ -36,4 +46,4 @@ tasks:
 
   lychee:
     desc: Link-check Markdown files (offline-friendly via --cache)
-    cmd: ocx exec --self ocx.sh/lychee:0 -- lychee --cache --no-progress README.md CHANGELOG.md .claude/rules/
+    cmd: ocx run lychee -- lychee --cache --no-progress README.md CHANGELOG.md .claude/rules/

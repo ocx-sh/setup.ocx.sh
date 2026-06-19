@@ -1,6 +1,12 @@
 [tools]
-task = "ocx.sh/go-task:3"
-shfmt = "ocx.sh/shfmt:3"
-shellcheck = "ocx.sh/shellcheck:0.11"
+elvish = "ocx.sh/elvish:latest"
+fish = "ocx.sh/fish:latest"
 git-cliff = "ocx.sh/git-cliff:2"
 lychee = "ocx.sh/lychee:0"
+nushell = "ocx.sh/nushell:latest"
+pwsh = "ocx.sh/pwsh:latest"
+shellcheck = "ocx.sh/shellcheck:0.11"
+shfmt = "ocx.sh/shfmt:3"
+task = "ocx.sh/go-task:3"
+
+[group]

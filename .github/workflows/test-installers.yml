@@ -15,37 +15,82 @@ permissions:
 
 jobs:
   bats:
-    name: Bats (env knobs / exit codes / print path)
-    runs-on: ubuntu-latest
+    name: Bats (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: Install bats + python3
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bats xz-utils python3
-      - name: Run bats
-        run: bats tests/install/
+        with:
+          submodules: recursive
+      # The nu/fish/elvish interpreters are bootstrapped from ocx.toml by the
+      # setup-ocx action (installs ocx + `ocx pull`); the suite is then run under
+      # `ocx run nushell fish elvish` so the per-shell suites EXECUTE rather than
+      # self-skip on `command -v`. The fixture deps (python3, tar, xz, sha256sum)
+      # are preinstalled on the ubuntu/macos runner images.
+      - uses: ocx-sh/setup-ocx@8cd2f38eed07c9b79aaed22e61f9ba6b36e967a3 # v1.2.2
+      - name: Run bats (vendored, shells via ocx.toml)
+        run: ocx run nushell fish elvish -- external/bats-core/bin/bats -r tests/install/
 
   pester:
-    name: Pester (env knobs)
-    runs-on: windows-latest
+    # Three legs:
+    #   - windows-latest / pwsh       : PowerShell 7 on Windows
+    #   - windows-latest / powershell : Windows PowerShell 5.1 (Desktop)
+    #   - ubuntu-latest  / pwsh       : PowerShell 7 on Linux (most paths run; the
+    #     binary-execution scenarios self-skip via -Skip:(-not $IsWindows)).
+    name: Pester (${{ matrix.os }} / ${{ matrix.shell }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            shell: pwsh
+          - os: windows-latest
+            shell: powershell
+          - os: ubuntu-latest
+            shell: pwsh
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: Install Pester
-        shell: pwsh
+      - name: Install Pester (v5)
+        shell: ${{ matrix.shell }}
         run: |
-          Install-Module -Name Pester -Scope CurrentUser -Force -Repository PSGallery -SkipPublisherCheck
+          Install-Module -Name Pester -MinimumVersion 5 -Force -Scope CurrentUser -Repository PSGallery -SkipPublisherCheck
       - name: Run Pester
-        shell: pwsh
+        shell: ${{ matrix.shell }}
         run: |
+          Import-Module Pester -MinimumVersion 5
           $cfg = New-PesterConfiguration
           $cfg.Run.Path = "tests/install/ps1"
           $cfg.Run.Exit = $true
           $cfg.Output.Verbosity = "Detailed"
           Invoke-Pester -Configuration $cfg
+      # Windows PowerShell 5.1 Desktop smoke: drives the test-only binary hatch so
+      # no network artifact is needed; the PrintPath contract must hold under 5.1.
+      - name: 5.1 smoke install (powershell.exe)
+        if: matrix.shell == 'powershell'
+        shell: powershell
+        run: |
+          $stub = Join-Path $env:RUNNER_TEMP 'ocx.exe'
+          Set-Content -Path $stub -Value '@echo 0.0.0' -Encoding ascii
+          $env:OCX_HOME = Join-Path $env:RUNNER_TEMP '.ocx'
+          $env:OCX_NO_MODIFY_PATH = '1'
+          $env:__OCX_TESTING_INSTALL_BINARY = $stub
+          $out = powershell.exe -NoProfile -ExecutionPolicy Bypass -File src/install.ps1 -NoSetup -PrintPath -NoSmoketest
+          if ($LASTEXITCODE -ne 0) { throw "install.ps1 exited $LASTEXITCODE" }
+          $binDir = ($out | Select-Object -Last 1)
+          if (-not (Test-Path (Join-Path $binDir 'ocx.exe'))) {
+            throw "expected ocx.exe under printed bin dir: $binDir"
+          }
 
+  # Real-release smoke: installs the real ocx from the live dist.json. The
+  # project is pre-release (no dist.json published yet), so these run on manual
+  # dispatch only — enable them once the first release ships.
   install-sh-real:
     name: install.sh (real release)
+    if: github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
@@ -53,35 +98,35 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: Run install.sh against real release
+      - name: Run install.sh against the real release
         run: |
-          version_arg=""
+          args=""
           if [ -n "${{ inputs.release_tag }}" ]; then
-            version_arg="--version $(echo '${{ inputs.release_tag }}' | sed 's/^v//')"
+            args="--version $(echo '${{ inputs.release_tag }}' | sed 's/^v//')"
           fi
           # shellcheck disable=SC2086
-          OCX_NO_MODIFY_PATH=1 sh sh/install.sh $version_arg
+          OCX_NO_MODIFY_PATH=1 OCX_INSTALL_PRINT_PATH=1 sh src/install.sh $args
       - name: Verify
         run: |
           export PATH="$HOME/.ocx/symlinks/ocx.sh/ocx/cli/current/content/bin:$PATH"
           ocx version
-          test -f "$HOME/.ocx/env.sh"
 
   install-ps1-windows:
     name: install.ps1 (Windows, real release)
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Run install.ps1
         shell: pwsh
         run: |
-          $args = @()
+          $a = @()
           if ("${{ inputs.release_tag }}") {
-            $args += "-Version"
-            $args += "${{ inputs.release_tag }}".TrimStart('v')
+            $a += "-Version"
+            $a += "${{ inputs.release_tag }}".TrimStart('v')
           }
           $env:OCX_NO_MODIFY_PATH = "1"
-          pwsh -NoProfile -File pwsh/install.ps1 @args
+          pwsh -NoProfile -File src/install.ps1 @a
       - name: Verify
         shell: pwsh
         run: |

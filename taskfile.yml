@@ -8,6 +8,9 @@ env:
 includes:
   shell: ./taskfiles/shell.taskfile.yml
   pwsh: ./taskfiles/pwsh.taskfile.yml
+  nu: ./taskfiles/nu.taskfile.yml
+  fish: ./taskfiles/fish.taskfile.yml
+  elvish: ./taskfiles/elvish.taskfile.yml
   test: ./taskfiles/test.taskfile.yml
   docker: ./taskfiles/docker.taskfile.yml
   release: ./taskfiles/release.taskfile.yml
@@ -47,11 +50,19 @@ includes:
       GLOB: 'cliff.toml'
 
 tasks:
-  ocx:index-update:
-    desc: Refresh the OCX tool index lock.
+  ocx:lock:
+    desc: Re-resolve ocx.toml tool tags to digests and materialize the object store.
+    # Reads every [tools] binding from ocx.toml, resolves each tag to a digest,
+    # writes ocx.lock, and pre-warms the object store. This is the single source
+    # of truth for the toolchain — the shell lint/test gates bootstrap their
+    # interpreters (nu/fish/elvish/pwsh) from these same bindings via `ocx run`.
     cmds:
-      - rm -rf .ocx/index
-      - ocx index update ocx.sh/go-task:3 ocx.sh/shfmt:3 ocx.sh/shellcheck:0.11 ocx.sh/git-cliff:2 ocx.sh/lychee:0
+      - ocx lock
+
+  ocx:lock:check:
+    desc: CI primitive — assert ocx.lock is current relative to ocx.toml (exit 65 if stale).
+    cmds:
+      - ocx lock --check
 
   # Two-phase verify: parallel lint, then sequential tests.
   verify:
@@ -68,6 +79,9 @@ tasks:
     deps:
       - task: shell:verify
       - task: pwsh:verify
+      - task: nu:verify
+      - task: fish:verify
+      - task: elvish:verify
       - task: meta:verify
 
   .verify:tests:
@@ -77,11 +91,29 @@ tasks:
       - task: test:pester
 
   publish:dry-run:
-    desc: Validate publish-installers.sh rsync paths without uploading.
+    desc: Validate publish-installers.sh STABLE rsync paths + index gen (no upload).
     vars:
+      # Strip any leading v AND any prerelease suffix so this always exercises
+      # the stable channel (sh/install.sh + pwsh/install.ps1 pointers).
       VERSION:
-        sh: 'ocx run git-cliff -- git-cliff --bumped-version 2>/dev/null | sed "s/^v//" || echo "0.0.0-dev"'
+        sh: 'ocx run git-cliff -- git-cliff --bumped-version 2>/dev/null | sed "s/^v//; s/-.*//" || echo "0.0.0"'
     cmd: DRY_RUN=1 VERSION={{.VERSION}} SSH_KEY=/dev/null SETUP_OCX_HOST=setup.ocx.sh scripts/publish-installers.sh
+
+  publish:dev-dry-run:
+    desc: Validate publish-installers.sh NEXT (prerelease) rsync paths + index gen (no upload).
+    vars:
+      # Force a prerelease VERSION so the next/ channel pointers are exercised.
+      # Override with VERSION=X.Y.Z-rc.N on the CLI.
+      VERSION: '{{.VERSION | default "0.0.0-dev.0"}}'
+    cmd: DRY_RUN=1 VERSION={{.VERSION}} SSH_KEY=/dev/null SETUP_OCX_HOST=setup.ocx.sh scripts/publish-installers.sh
+
+  dist:
+    # Sourced from the ocx-sh/ocx GitHub Releases API (NOT this repo's tags), so
+    # this makes a live api.github.com call (unauthenticated unless GITHUB_TOKEN
+    # is exported; subject to the 60/hr unauth rate limit). Per release it also
+    # fetches each release's sha256.sum asset to inline the per-target checksums.
+    desc: Print the distribution manifest (dist.json) from the ocx-sh/ocx Releases API.
+    cmd: scripts/gen-dist.sh
 
   format:
     desc: Auto-format shell scripts

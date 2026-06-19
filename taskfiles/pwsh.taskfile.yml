@@ -1,28 +1,25 @@
 # yaml-language-server: $schema=https://taskfile.dev/schema.json
 #
-# PowerShell quality gate. pwsh must be on PATH; OCX does not currently
-# vendor a pwsh package. CI uses ubuntu-latest's preinstalled pwsh; locally
-# install via your package manager.
+# PowerShell quality gate. The `pwsh` interpreter is bootstrapped from ocx.toml
+# (binding `pwsh`) via `ocx run` — no system PowerShell required. PSScriptAnalyzer
+# is installed into the CurrentUser scope on demand.
 
 version: '3'
 
 tasks:
   verify:
-    desc: PowerShell quality gate (PSScriptAnalyzer)
-    preconditions:
-      - sh: command -v pwsh
-        msg: 'pwsh not on PATH; install PowerShell to run this gate'
+    desc: PowerShell quality gate (PSScriptAnalyzer, pwsh via ocx.toml)
     cmd: |
-      pwsh -NoProfile -Command '
+      ocx run pwsh -- pwsh -NoProfile -Command '
         if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
           Install-Module -Name PSScriptAnalyzer -Scope CurrentUser -Force -Repository PSGallery
         }
-        Invoke-ScriptAnalyzer -Path pwsh/install.ps1 -Severity Warning,Error -Settings ./PSScriptAnalyzerSettings.psd1 -EnableExit
+        Invoke-ScriptAnalyzer -Path src/install.ps1 -Severity Warning,Error -Settings ./PSScriptAnalyzerSettings.psd1 -EnableExit
       '
 
   format:check:
-    desc: PSScriptAnalyzer format-rule subset
+    desc: PSScriptAnalyzer format-rule subset (pwsh via ocx.toml)
     cmd: |
-      pwsh -NoProfile -Command '
-        Invoke-ScriptAnalyzer -Path pwsh/install.ps1 -Settings PSGallery -EnableExit
+      ocx run pwsh -- pwsh -NoProfile -Command '
+        Invoke-ScriptAnalyzer -Path src/install.ps1 -Settings PSGallery -EnableExit
       '

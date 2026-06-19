@@ -10,38 +10,65 @@ permissions:
   contents: read
 
 jobs:
-  shellcheck:
-    name: ShellCheck
+  # ---------------------------------------------------------------------------
+  # Lock currency gate: ocx.lock must be committed and current vs ocx.toml.
+  # Everything below bootstraps its interpreters from this lock, so a drifted
+  # lock is a fail-fast signal (ocx lock --check exits 65 on drift, 78 if absent).
+  # ---------------------------------------------------------------------------
+  ocx-lock:
+    name: ocx.lock current
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: ShellCheck installer + helper scripts
-        run: |
-          shellcheck sh/install.sh
-          shellcheck scripts/publish-installers.sh
-          shellcheck tests/docker/run.sh tests/docker/smoke.sh
+      - uses: ocx-sh/setup-ocx@8cd2f38eed07c9b79aaed22e61f9ba6b36e967a3 # v1.2.2
+      - run: ocx lock --check
 
-  shfmt:
-    name: shfmt diff
+  # ---------------------------------------------------------------------------
+  # Shell lint gates. Each interpreter (shellcheck/shfmt, pwsh, nu, fish, elvish)
+  # is bootstrapped from ocx.toml by the setup-ocx action, which installs ocx and
+  # runs `ocx pull` to materialize the pinned toolchain — then `task <shell>:verify`
+  # invokes the gate exactly as it runs locally (`ocx run <binding> -- <tool>`).
+  # No ad-hoc apt/tarball shell installs.
+  # ---------------------------------------------------------------------------
+  shell:
+    name: shellcheck + shfmt
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: mfinelli/setup-shfmt@1a143389339b48c4b48ae3cdc058f3dbe336a701 # v3
-        with:
-          shfmt-version: 3.10.0
-      - run: shfmt -d -i 4 -ci sh/ scripts/ tests/docker/
+      - uses: ocx-sh/setup-ocx@8cd2f38eed07c9b79aaed22e61f9ba6b36e967a3 # v1.2.2
+      - run: task shell:verify
 
-  psscript-analyzer:
+  pwsh:
     name: PSScriptAnalyzer
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: Install PSScriptAnalyzer
-        shell: pwsh
-        run: Install-Module -Name PSScriptAnalyzer -Scope CurrentUser -Force -Repository PSGallery
-      - name: Run
-        shell: pwsh
-        run: Invoke-ScriptAnalyzer -Path pwsh/install.ps1 -Severity Warning,Error -EnableExit
+      - uses: ocx-sh/setup-ocx@8cd2f38eed07c9b79aaed22e61f9ba6b36e967a3 # v1.2.2
+      - run: task pwsh:verify
+
+  nu:
+    name: nu --ide-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: ocx-sh/setup-ocx@8cd2f38eed07c9b79aaed22e61f9ba6b36e967a3 # v1.2.2
+      - run: task nu:verify
+
+  fish:
+    name: fish -n
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: ocx-sh/setup-ocx@8cd2f38eed07c9b79aaed22e61f9ba6b36e967a3 # v1.2.2
+      - run: task fish:verify
+
+  elvish:
+    name: elvish -compileonly
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: ocx-sh/setup-ocx@8cd2f38eed07c9b79aaed22e61f9ba6b36e967a3 # v1.2.2
+      - run: task elvish:verify
 
   actionlint:
     name: actionlint
@@ -64,6 +91,7 @@ jobs:
             !CHANGELOG.md
             !node_modules
             !.git
+            !external
 
   lychee:
     name: lychee link check

@@ -3,30 +3,39 @@
 version: '3'
 
 tasks:
+  bootstrap:
+    desc: Initialize the vendored bats submodules (external/bats-*).
+    # Idempotent; safe to run repeatedly. Test tasks depend on this so a fresh
+    # clone resolves bats without a manual submodule step.
+    status:
+      - test -x external/bats-core/bin/bats
+      - test -f external/bats-support/load.bash
+      - test -f external/bats-assert/load.bash
+    cmds:
+      - git submodule update --init --recursive
+
   bats:
-    desc: Run Bats env-knob + exit-code + print-path suites against fixture HTTP server
-    # bats is not an OCX-provisionable package; it must be on PATH (CI installs
-    # it via apt, locally via your package manager).
+    desc: Run the Bats install suites against the fixture HTTPS server (vendored bats)
+    deps: [bootstrap]
     preconditions:
-      - sh: command -v bats
-        msg: 'bats not on PATH; install Bats to run this suite'
       - sh: command -v python3
-        msg: 'python3 required for fixture HTTP server'
+        msg: 'python3 required for fixture HTTPS server'
       - sh: command -v tar
         msg: 'tar required for fixture archive build'
       - sh: command -v xz
         msg: 'xz required for fixture archive build'
       - sh: command -v sha256sum
         msg: 'sha256sum required for fixture checksum generation'
-    cmd: bats -r tests/install/
+    # The nu/fish/elvish interpreters are bootstrapped from ocx.toml via `ocx run`
+    # so the per-shell suites (tests/install/{nu,fish,elvish}/) actually execute
+    # instead of self-skipping on `command -v`. The POSIX (sh) suites use the
+    # system shell and are unaffected by the composed env.
+    cmd: ocx run nushell fish elvish -- external/bats-core/bin/bats -r tests/install/
 
   pester:
-    desc: Run Pester equivalents on Windows / pwsh
-    preconditions:
-      - sh: command -v pwsh
-        msg: 'pwsh required for Pester tests'
+    desc: Run Pester equivalents on pwsh (bootstrapped from ocx.toml)
     cmd: |
-      pwsh -NoProfile -Command '
+      ocx run pwsh -- pwsh -NoProfile -Command '
         if (-not (Get-Module -ListAvailable Pester)) {
           Install-Module -Name Pester -Scope CurrentUser -Force -Repository PSGallery -SkipPublisherCheck
         }
@@ -39,8 +48,6 @@ tasks:
 
   bats:single:
     desc: Run a single Bats file (pass FILE=path/to.bats)
+    deps: [bootstrap]
     requires: { vars: [FILE] }
-    preconditions:
-      - sh: command -v bats
-        msg: 'bats not on PATH; install Bats to run this suite'
-    cmd: bats {{.FILE}}
+    cmd: external/bats-core/bin/bats {{.FILE}}

@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+#
+# Nushell quality gate. The `nu` interpreter is bootstrapped from ocx.toml
+# (binding `nushell`) via `ocx run` — no system Nushell required. install.nu is
+# parse-checked with --ide-check.
+
+version: '3'
+
+tasks:
+  verify:
+    desc: Nushell quality gate (nu --ide-check parse check, nu via ocx.toml)
+    # --ide-check emits diagnostics as one JSON record per line. A genuine parse
+    # error surfaces as a `{"type":"diagnostic",...,"severity":"Error",...}` line
+    # (or a hard nonzero exit); fail the gate if any Error diagnostic appears.
+    cmd: |
+      out="$(ocx run nushell -- nu --ide-check 1000 src/install.nu 2>&1)" || { printf '%s\n' "$out"; exit 1; }
+      printf '%s\n' "$out"
+      printf '%s\n' "$out" | grep -qi '"severity":[[:space:]]*"error"' && exit 1
+      exit 0

@@ -1,0 +1,58 @@
+name: Verify distros
+
+# Cross-distro proof that the project toolchain bootstraps from ocx.toml inside a
+# clean container and the per-shell installer suites pass there. Mirrors the
+# test-docker matrix's host-orchestrated model: the job runs on the ubuntu HOST
+# (so JS actions like checkout run on glibc), and each distro is exercised inside
+# `docker run` — which sidesteps the well-known "node24 JS action fails on musl"
+# problem that container: jobs hit on Alpine.
+#
+# Inside each container: install base deps (setup-distro.sh) → bootstrap ocx
+# itself (install-ocx.sh) → run the Bats suites with nu/fish/elvish provisioned
+# straight from ocx.toml via `ocx run`. No apt/tarball shell installs; the shells
+# come from the OCX toolchain, the same way they do locally.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-distros-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  distro-bats:
+    name: bats / ${{ matrix.distro }}
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: alpine
+            image: 'alpine:3.20'
+          - distro: fedora
+            image: 'fedora:41'
+          - distro: ubuntu
+            image: 'ubuntu:24.04'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+
+      - name: Bootstrap ocx.toml + run bats in ${{ matrix.distro }}
+        run: |
+          docker run --rm \
+            --volume "$PWD:/work" \
+            --workdir /work \
+            "${{ matrix.image }}" \
+            sh -euc '
+              sh tests/ci/setup-distro.sh "${{ matrix.distro }}"
+              sh tests/ci/install-ocx.sh >/dev/null
+              ocx run nushell fish elvish -- external/bats-core/bin/bats -r tests/install/
+            '

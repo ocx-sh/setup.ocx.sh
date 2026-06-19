@@ -1,0 +1,13 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+#
+# Elvish quality gate. The `elvish` interpreter is bootstrapped from ocx.toml
+# (binding `elvish`) via `ocx run` — no system Elvish required. install.elv is
+# compile-checked with `elvish -compileonly` (parses + compiles without
+# executing).
+
+version: '3'
+
+tasks:
+  verify:
+    desc: Elvish quality gate (elvish -compileonly, elvish via ocx.toml)
+    cmd: ocx run elvish -- elvish -compileonly src/install.elv

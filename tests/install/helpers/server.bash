@@ -206,7 +206,12 @@ server_build_fixture() {
     fi
 
     local _sum
-    _sum=$(sha256sum "$_archive" | awk '{print $1}')
+    # Portable sha256: coreutils sha256sum (Linux) or BSD/macOS shasum.
+    if command -v sha256sum >/dev/null 2>&1; then
+        _sum=$(sha256sum "$_archive" | awk '{print $1}')
+    else
+        _sum=$(shasum -a 256 "$_archive" | awk '{print $1}')
+    fi
 
     server_write_dist "$_srv" "$_target" "$_sum" "$_file"
 

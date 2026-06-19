@@ -212,13 +212,11 @@ install_ksh() {
 
 install_elvish() {
     command -v elvish >/dev/null 2>&1 && return 0
-    # Try distro packages first (alpine community / fedora / ubuntu universe).
-    case "$DISTRO_ID" in
-        alpine) pm_try elvish && command -v elvish >/dev/null 2>&1 && return 0 ;;
-        fedora) pm_try elvish && command -v elvish >/dev/null 2>&1 && return 0 ;;
-        ubuntu | debian) pm_try elvish && command -v elvish >/dev/null 2>&1 && return 0 ;;
-    esac
-    # Fallback: pinned GitHub release tarball -> /usr/local/bin.
+    # Always install the pinned release tarball — NOT the distro package. Distro
+    # elvish (e.g. Ubuntu 24.04 universe ships 0.19) predates the os: module
+    # functions the installer relies on (`os:mkdir-all`, added in 0.21), so a
+    # distro build fails the smoke with "variable $os:mkdir-all~ not found". The
+    # pin matches the OCX-provisioned elvish (0.21) used locally and in CI.
     ensure_base_tools
     _url="https://dl.elv.sh/linux-${ARCH_GO}/elvish-v${ELVISH_VERSION}.tar.gz"
     _tmp=$(mktemp -d)

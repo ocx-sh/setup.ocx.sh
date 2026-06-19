@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 The OCX Authors
+#
 # install.ps1 - OCX installer for Windows
 # https://ocx.sh
 #

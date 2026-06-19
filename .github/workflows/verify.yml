@@ -98,7 +98,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: lycheeverse/lychee-action@1d97373ee75d56796b6e3da6e69a17b1b4dca4cf # v2
+      - uses: lycheeverse/lychee-action@8646ba30535128ac92d33dfc9133794bfdd9b411 # v2.8.0
         with:
           args: --cache --no-progress README.md CHANGELOG.md .claude/rules/
           fail: true
@@ -110,7 +110,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: korandoru/hawkeye@v6
         with:
-          args: check
+          config: .licenserc.toml
 
   conventional-commits:
     name: Conventional Commits
@@ -122,4 +122,4 @@ jobs:
           fetch-depth: 0
       - uses: cocogitto/cocogitto-action@v4.2.0
         with:
-          check-latest-tag-only: true
+          command: check

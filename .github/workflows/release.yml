@@ -72,19 +72,24 @@ jobs:
 
       - name: Configure SSH
         env:
-          DEPLOY_KEY: ${{ secrets.SETUP_OCX_DEPLOY_KEY }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
         run: |
+          test -n "$DEPLOY_SSH_KEY" || { echo "DEPLOY_SSH_KEY secret is empty" >&2; exit 1; }
+          test -n "$DEPLOY_SSH_KNOWN_HOSTS" || { echo "DEPLOY_SSH_KNOWN_HOSTS secret is empty" >&2; exit 1; }
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H setup.ocx.sh >> ~/.ssh/known_hosts 2>/dev/null
+          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
 
       - name: Publish
         env:
           TAG: ${{ github.ref_name }}
           SSH_KEY: /home/runner/.ssh/id_ed25519
-          SETUP_OCX_HOST: setup.ocx.sh
+          SETUP_OCX_HOST: ${{ secrets.DEPLOY_HOST }}
+          SSH_PORT: ${{ secrets.DEPLOY_PORT }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${TAG#v}" scripts/publish-installers.sh

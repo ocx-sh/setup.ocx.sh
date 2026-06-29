@@ -100,7 +100,7 @@ This project is **pre-release**: there are zero git tags and nothing has shipped
 
 - Conventional Commits drive versioning via [git-cliff](https://git-cliff.org).
 - `task release:prepare` produces the version commit + tag locally; pushing the tag triggers `.github/workflows/release.yml`.
-- The release workflow does: gh release (git-cliff notes; `prerelease: true` for `-`-suffixed tags) → `publish-installers` job (channel-routed rsync of all five installers via `SETUP_OCX_DEPLOY_KEY` + refresh/upload `dist.json` via `publish-dist.sh`). The manifest is also rebuilt out-of-band by `update-dist.yml` on `repository_dispatch(ocx-released)` from `ocx-sh/ocx` + an hourly cron fallback + manual dispatch.
+- The release workflow does: gh release (git-cliff notes; `prerelease: true` for `-`-suffixed tags) → `publish-installers` job (channel-routed rsync of all five installers via the `DEPLOY_SSH_KEY` deploy key + refresh/upload `dist.json` via `publish-dist.sh`). The manifest is also rebuilt out-of-band by `update-dist.yml` on `repository_dispatch(ocx-released)` from `ocx-sh/ocx` + an hourly cron fallback + manual dispatch.
 - A `-`-suffixed tag (`vX.Y.Z-rc.1`) is a prerelease: it routes to the `next` channel and the GitHub prerelease flag; stable pointers are untouched.
 
 The conventional-commit → version-bump mapping (applies once the project starts versioning):
@@ -122,7 +122,10 @@ Scopes are optional: `feat(install): add OCX_INSTALL_MIRROR_URL`.
 
 | Secret | Used by |
 |---|---|
-| `SETUP_OCX_DEPLOY_KEY` | `publish-installers` rsync to `setup.ocx.sh` |
+| `DEPLOY_SSH_KEY` | Private SSH deploy key for the `publish-installers` + `update-dist` rsync to `setup.ocx.sh` (written to `~/.ssh/id_ed25519`) |
+| `DEPLOY_SSH_KNOWN_HOSTS` | Pre-pinned `known_hosts` line for the deploy host (replaces `ssh-keyscan` in the workflows) |
+| `DEPLOY_HOST` | rsync/ssh target host → `SETUP_OCX_HOST` |
+| `DEPLOY_PORT` | ssh port → `SSH_PORT` |
 | `SETUP_OCX_DISPATCH_TOKEN` | Lives in **`ocx-sh/ocx`** (not this repo): a token scoped to setup.ocx.sh (fine-grained PAT `contents:read` + `actions:write`, or classic `repo`) that `ocx-sh/ocx` uses to fire the `repository_dispatch(ocx-released)` that rebuilds `dist.json`. See `deploy/github/ocx-release-dispatch.yml.example`. |
 
 ## Deep context

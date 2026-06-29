@@ -24,7 +24,7 @@ The tag push triggers `.github/workflows/release.yml`.
 | Job | Action |
 |---|---|
 | `release` | Generates GitHub release notes from git-cliff `--latest`, creates the release. Marks it `prerelease: true` when the tag contains `-`, and SKIPS the "update major version tag" step for prerelease tags. |
-| `publish-installers` | Table-driven rsync of all five `src/install.*` to the channel-appropriate paths via `publish-installers.sh` (`SETUP_OCX_DEPLOY_KEY`), then refreshes + uploads `dist.json` via `publish-dist.sh` (which regenerates it from the `ocx-sh/ocx` Releases API via `gen-dist.sh`) |
+| `publish-installers` | Table-driven rsync of all five `src/install.*` to the channel-appropriate paths via `publish-installers.sh` (`DEPLOY_SSH_KEY` + `DEPLOY_HOST`/`DEPLOY_PORT`/`DEPLOY_SSH_KNOWN_HOSTS`), then refreshes + uploads `dist.json` via `publish-dist.sh` (which regenerates it from the `ocx-sh/ocx` Releases API via `gen-dist.sh`) |
 
 Both jobs run on every `v*` tag (prereleases included). There is no mirror-to-GitLab step — the GLF lives in a separate repo now.
 

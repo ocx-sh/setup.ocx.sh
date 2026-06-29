@@ -80,7 +80,7 @@ Never publish a file under a path that nginx will reroute — it just confuses c
 - Pinned versioned uploads use `--ignore-existing` so a re-run of a release tag never silently overwrites a previously published artifact. If you ever need to overwrite, do it by hand, then audit the cache invalidation downstream.
 - The `latest/` + `next/` pointers and `dist.json` overwrite freely. They **never** use `--delete` — the `archive/` versioned dirs must be preserved.
 - `dist.json` is staged to a mktemp file first (`publish-dist.sh`); the generator is clobber-safe (exits non-zero on any fetch/parse/checksum failure and never emits a partial manifest), and `set -e` aborts the upload before the live `dist.json` is touched.
-- All transfers happen over SSH with a deploy key (`SETUP_OCX_DEPLOY_KEY` secret) bound to the `setup.ocx.sh` environment. The key is single-purpose; it has no shell, no sudo, no read access outside the docroot.
+- All transfers happen over SSH with a deploy key (`DEPLOY_SSH_KEY` secret, with `DEPLOY_HOST`/`DEPLOY_PORT`/`DEPLOY_SSH_KNOWN_HOSTS`) bound to the `setup.ocx.sh` environment. The key is single-purpose; it has no shell, no sudo, no read access outside the docroot.
 
 ## Versioned vs latest
 

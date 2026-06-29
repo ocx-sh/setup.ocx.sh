@@ -55,6 +55,11 @@ sh "$GEN_DIST" >"$DIST_TMP"
 
 echo "publish-dist: generated dist manifest ($(wc -c <"$DIST_TMP") bytes)"
 
+# mktemp creates the staging file mode 600; rsync -a preserves it, leaving the
+# remote dist.json unreadable by the nginx worker (HTTP 403). Force world-read
+# so the manifest is actually servable.
+chmod 644 "$DIST_TMP"
+
 # Upload (overwrite, never --delete) so sibling versioned dirs are preserved.
 # shellcheck disable=SC2086
 rsync $RSYNC_OPTS -e "$SSH_CMD" \

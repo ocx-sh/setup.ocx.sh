@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Nightly: drives the real-release smoke jobs (live dist.json + CDN). The
+    # hermetic fixture/stub jobs run on every push/PR; the networked real-release
+    # legs are too flaky/external for per-commit, so they ride the nightly tick.
+    - cron: '37 4 * * *'
   workflow_dispatch:
     inputs:
       release_tag:
@@ -29,13 +34,70 @@ jobs:
       - name: Run bats (vendored, shells via ocx.toml)
         run: ocx run nushell fish elvish -- external/bats-core/bin/bats -r tests/install/
 
-  # NOTE: macOS is intentionally not in the BATS matrix. The runner ships bash 3.2
-  # (no negative array subscripts — the suites use `${lines[-1]}`), and ocx has no
-  # darwin/arm64 leaf for nu/fish/elvish at the locked version, so the per-shell
-  # suites cannot be bootstrapped there. Linux (bats-linux + verify-distros.yml)
-  # covers the POSIX + exotic installers. macOS IS covered for PowerShell, though:
-  # the Pester job below runs on macos-latest (fixture-based, no real darwin ocx
-  # needed), and the workflow_dispatch real-release jobs exercise the live path.
+  # macOS Bats: the suites are bash-3.2-safe (no negative array subscripts; the
+  # fixture helper uses sha256sum-or-shasum), so the stock /bin/bash 3.2 runner
+  # executes them. nu + fish + elvish are bootstrapped from ocx.toml (all three
+  # have darwin leaves), so every exotic per-shell suite EXECUTES on macOS. dist.bats
+  # (the gen-dist.sh generator) is a CI-side Linux tool covered by
+  # bats-linux/verify-distros, not part of the macOS installer contract, so the
+  # install suites are listed explicitly rather than `-r`.
+  bats-macos:
+    name: Bats (macos-latest)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+      - uses: ocx-sh/setup-ocx@8cd2f38eed07c9b79aaed22e61f9ba6b36e967a3 # v1.2.2
+      - name: Run bats (vendored; nu/fish/elvish via ocx.toml)
+        run: |
+          ocx run nushell fish elvish -- external/bats-core/bin/bats \
+            tests/install/env-knobs.bats \
+            tests/install/exit-codes.bats \
+            tests/install/print-path.bats \
+            tests/install/nu \
+            tests/install/fish \
+            tests/install/elvish
+
+  # Windows nu/elvish smoke: install.nu and install.elv are cross-platform
+  # (*-pc-windows-msvc target, ocx.exe binary). A full Bats run on Windows would
+  # need bash; instead this is a fixture-free smoke (mirrors smoke-windows-51 for
+  # pwsh) that drives each installer through the __OCX_TESTING_INSTALL_BINARY hatch
+  # under its ocx-provisioned interpreter and asserts the PrintPath contract — the
+  # only automated nu/elvish-on-Windows coverage.
+  smoke-windows-nu-elvish:
+    name: ${{ matrix.label }} smoke (windows-latest)
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: install.nu
+            binding: nushell
+            entry: nu src/install.nu
+          - label: install.elv
+            binding: elvish
+            entry: elvish src/install.elv
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: ocx-sh/setup-ocx@8cd2f38eed07c9b79aaed22e61f9ba6b36e967a3 # v1.2.2
+      - name: Smoke (${{ matrix.label }})
+        shell: pwsh
+        run: |
+          $stub = Join-Path $env:RUNNER_TEMP 'ocx.exe'
+          Set-Content -Path $stub -Value '@echo 0.0.0' -Encoding ascii
+          $env:OCX_HOME = Join-Path $env:RUNNER_TEMP '.ocx'
+          $env:OCX_NO_MODIFY_PATH = '1'
+          $env:OCX_INSTALL_NO_SETUP = '1'
+          $env:OCX_INSTALL_NO_SMOKETEST = '1'
+          $env:OCX_INSTALL_PRINT_PATH = '1'
+          $env:__OCX_TESTING_INSTALL_BINARY = $stub
+          $out = ocx run ${{ matrix.binding }} -- ${{ matrix.entry }}
+          if ($LASTEXITCODE -ne 0) { throw "${{ matrix.label }} exited $LASTEXITCODE" }
+          $binDir = ($out | Select-Object -Last 1)
+          if (-not (Test-Path (Join-Path $binDir 'ocx.exe'))) {
+            throw "expected ocx.exe under printed bin dir: $binDir"
+          }
 
   # PowerShell 7 (pwsh) on Windows + Linux + macOS. install.ps1 is cross-platform
   # (it resolves *-unknown-linux-{gnu,musl} / *-apple-darwin targets and the `ocx`
@@ -94,12 +156,13 @@ jobs:
             throw "expected ocx.exe under printed bin dir: $binDir"
           }
 
-  # Real-release smoke: installs the real ocx from the live dist.json. The
-  # project is pre-release (no dist.json published yet), so these run on manual
-  # dispatch only — enable them once the first release ships.
+  # Real-release smoke: installs the real ocx from the live dist.json (network,
+  # non-hermetic). Runs nightly + on manual dispatch — kept off per-commit because
+  # an installer-code change does not alter what the live server serves, so a
+  # per-push run only adds network flake, not signal.
   install-sh-real:
     name: install.sh (real release)
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
@@ -122,7 +185,7 @@ jobs:
 
   install-ps1-windows:
     name: install.ps1 (Windows, real release)
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -145,10 +208,10 @@ jobs:
 
   # install.ps1 on Linux + macOS via pwsh 7 (real release). install.ps1 is
   # cross-platform, so a pwsh user on Unix gets a real install (the `ocx` binary
-  # under <home>/.ocx). Manual dispatch only, like the install-sh-real jobs.
+  # under <home>/.ocx). Nightly + manual dispatch, like the install-sh-real jobs.
   install-ps1-unix:
     name: install.ps1 (${{ matrix.os }}, real release)
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:

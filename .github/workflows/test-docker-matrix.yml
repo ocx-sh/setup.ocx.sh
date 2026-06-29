@@ -67,16 +67,18 @@ jobs:
   # SHELL-axis activation matrix (REAL binary required).
   #
   # In the thin-installer model the installer hands off to `ocx self setup`, which
-  # is what writes the per-shell env shims + profile/autoload blocks. A stub does
-  # NOT write them, so this matrix is meaningful ONLY with a REAL ocx binary
-  # injected via OCX_TEST_BINARY. Since the project is pre-release (no published
-  # ocx yet), this runs on manual dispatch only — provide a real ocx via
-  # OCX_TEST_BINARY once one exists. It exercises the per-shell profile/autoload
-  # activation path that the smoke matrix (OCX_NO_MODIFY_PATH=1) never touches.
+  # writes the per-shell env shims + profile/autoload blocks. A stub does NOT
+  # write them, so this matrix is meaningful ONLY with a REAL ocx. No injection is
+  # needed: run.sh with NO OCX_TEST_BINARY does a real network install from the
+  # live dist.json, and the container's arch (native amd64 / QEMU arm64) selects
+  # the matching ocx target — so the in-container install IS the real ocx. The
+  # network/QEMU cost keeps this off per-commit: it runs nightly + manual dispatch.
+  # It exercises the per-shell profile/autoload activation path the smoke matrix
+  # (OCX_NO_MODIFY_PATH=1) never touches.
   # ---------------------------------------------------------------------------
   shell-matrix:
     name: ${{ matrix.shell }} / ${{ matrix.distro }} / ${{ matrix.platform }}
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

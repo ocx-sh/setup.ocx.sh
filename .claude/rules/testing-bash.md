@@ -42,6 +42,7 @@ exposes:
 | `server_write_dist ROOT TARGET SHA FILE` | (Re)write a single-release `dist.json` — used by tamper tests (e.g. a wrong `sha256` for the exit-4 path). |
 | `server_finalize_dist_url ROOT BASE` | Rewrite the dummy manifest `url` to the real fixture server (for the one URL-passthrough test that drops `OCX_INSTALL_MIRROR_URL`). |
 | `server_stub_body` | Emit the body of the fixture `ocx` stub binary packed into the archive. |
+| `server_sha256 FILE` | Portable sha256 of `FILE` — coreutils `sha256sum` (Linux) or BSD/macOS `shasum -a 256`. Use this in suites instead of bare `sha256sum` so the tamper tests run on the macOS Bats leg. |
 | `server_start ROOT LOGFILE` | Spin a python3 `ssl`-wrapped server on an ephemeral port against `ROOT`; echo `PID PORT`. Serves **HTTPS** (see below). |
 | `server_stop PID` | Kill the server. |
 | `server_ca_bundle` | Echo the path to the vendored localhost CA cert; export as `CURL_CA_BUNDLE`. |
@@ -172,6 +173,14 @@ hatch.
 - `dist.bats` drives `gen-dist.sh` via its offline hatches (`--releases-file`,
   `--checksums-dir`) — use `run --separate-stderr` so the generator's "skipping"
   warnings (stderr) don't corrupt the parsed `$output`.
+- **macOS / bash-3.2 safety.** The suites run on the `bats-macos` CI leg under the
+  stock `/bin/bash` (3.2). Keep them 3.2-safe: NO negative array subscripts — use
+  `${lines[${#lines[@]}-1]}`, not `${lines[-1]}` (array subscripts are arithmetic
+  context, so count-1 works; a literal `-1` does not). No `declare -A`, `mapfile`,
+  or `${var,,}`/`${var^^}`. For checksums use `server_sha256`, never bare
+  `sha256sum` (macOS ships `shasum`, not `sha256sum`). The macOS leg runs the
+  install suites (sh + nu + fish + elvish, via `ocx run nushell fish elvish`);
+  `dist.bats` is excluded (CI-side Linux generator).
 
 ## When to update tests
 

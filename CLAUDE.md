@@ -10,7 +10,7 @@ Guidance for Claude Code when working in this repository.
 
 ```
 setup.ocx.sh/<shell>            # bare → latest-stable installer (nginx rewrite → latest/install.<ext>)
-setup.ocx.sh/<shell>/next       # latest-prerelease ("next"); alias /<shell>/canary
+setup.ocx.sh/<shell>/next       # bleeding-edge ("next"): newest of prerelease + stable; alias /<shell>/canary
 setup.ocx.sh/<shell>/<VERSION>  # pinned (immutable) → archive/<VERSION>/install.<ext>
 setup.ocx.sh/dist               # → dist.json distribution manifest (OCX_INSTALL_DIST_URL)
 ```

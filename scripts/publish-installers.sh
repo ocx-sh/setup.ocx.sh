@@ -82,11 +82,17 @@ run_rsync() {
 
 echo "publish-installers: VERSION=$VERSION CHANNEL=$CHANNEL HOST=$SETUP_OCX_HOST DRY_RUN=$DRY_RUN"
 
-# Channel pointer dir: stable -> latest/ ; next -> next/. The other is untouched.
+# Channel pointer dirs:
+#   prerelease -> next/ only          (latest/ is never moved by a prerelease)
+#   stable     -> latest/ AND next/   (next is "bleeding edge" = newest of the
+#                                       two channels; a stable promotion must not
+#                                       leave next/ serving an OLDER prerelease)
+# Edge case (out of order): patching an old stable line while a newer prerelease
+# is pending would pull next/ back — handle that by hand on the rare occasion.
 if [ "$CHANNEL" = "next" ]; then
-    POINTER_DIR="next"
+    POINTER_DIRS="next"
 else
-    POINTER_DIR="latest"
+    POINTER_DIRS="latest next"
 fi
 
 # The remote dirs (archive/<VERSION>/ and the channel pointer) are created by
@@ -107,10 +113,12 @@ for f in $INSTALLER_FILES; do
     run_rsync --mkpath --ignore-existing -e "$SSH_CMD" \
         "$src" "${SETUP_OCX_HOST}:archive/${VERSION}/${f}"
 
-    # Channel pointer (mutable, no --delete).
-    echo "publish-installers: -> ${POINTER_DIR}/${f} (pointer)"
-    run_rsync --mkpath -e "$SSH_CMD" \
-        "$src" "${SETUP_OCX_HOST}:${POINTER_DIR}/${f}"
+    # Channel pointer(s) (mutable, no --delete). Stable writes latest/ + next/.
+    for ptr in $POINTER_DIRS; do
+        echo "publish-installers: -> ${ptr}/${f} (pointer)"
+        run_rsync --mkpath -e "$SSH_CMD" \
+            "$src" "${SETUP_OCX_HOST}:${ptr}/${f}"
+    done
 done
 
 # Refresh the distribution manifest (sourced from the OCX product repo's GitHub

@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.1](https://github.com/ocx-sh/setup.ocx.sh/releases/tag/v0.1.1) — 2026-06-30
+
+### Fixed
+
+- **release:** Generate full stable notes across prerelease tags by @michael-herwig ([93c02d7](https://github.com/ocx-sh/setup.ocx.sh/commit/93c02d70253015d97382a37e34b31e4366180543))
+- **publish:** Advance next/ pointer on stable releases by @michael-herwig ([30ae693](https://github.com/ocx-sh/setup.ocx.sh/commit/30ae6933017e4af011d2530f1a503bfeb7609ea0))
+- **ci:** Scope fish to ocx.toml [group.unix] so Windows project ops resolve by @michael-herwig ([0f3af46](https://github.com/ocx-sh/setup.ocx.sh/commit/0f3af46b52fb931cba679480eefb90655f619e49))
+- **install:** Follow GitHub asset redirect on Windows PowerShell 5.1 ([c6eac98](https://github.com/ocx-sh/setup.ocx.sh/commit/c6eac98b5443334e132d859a3525703256083ccd))
 ## [0.1.0](https://github.com/ocx-sh/setup.ocx.sh/releases/tag/v0.1.0) — 2026-06-29
 
 ### Added
